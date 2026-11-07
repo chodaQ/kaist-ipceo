@@ -7,9 +7,11 @@
 연산 백엔드:
   mock  : CPU 에서 실제 계산 루프를 돌림 (모델 없이 테스트용)
   llama : 같은 PC 의 llama-server(/completion)에 실제 추론 요청
-GPU 속도 차이는 --speed 로 흉내 낸다(1.0 = 이 PC 의 실제 속도, 낮을수록 느림).
+  vgpu  : 가상 GPU(vgpu.py)가 스펙·전력 한도·온도에 따라 시간·전력·열을 계산하고 그만큼 실제로 걸림
+mock/llama 의 GPU 속도 차이는 --speed 로 흉내 낸다(1.0 = 이 PC 의 실제 속도, 낮을수록 느림).
 """
 import argparse, hashlib, json, os, sys, threading, time, urllib.request, urllib.error
+import vgpu
 
 
 def post(url, obj, timeout=5):
@@ -41,7 +43,9 @@ def main():
     ap.add_argument("--id", required=True)
     ap.add_argument("--orch", default="http://127.0.0.1:8700")
     ap.add_argument("--speed", type=float, default=1.0)
-    ap.add_argument("--backend", choices=["mock", "llama"], default="mock")
+    ap.add_argument("--backend", choices=["vgpu", "mock", "llama"], default="vgpu")
+    ap.add_argument("--gpu", default="3060", choices=list(vgpu.GPUS))
+    ap.add_argument("--model", default="7B", choices=list(vgpu.MODELS))
     ap.add_argument("--llama-url", default="http://127.0.0.1:8080")
     ap.add_argument("--unit-ms", type=int, default=400)
     ap.add_argument("--n-predict", type=int, default=32)
@@ -56,23 +60,51 @@ def main():
             time.sleep(0.5)
     threading.Thread(target=beat, daemon=True).start()
 
+    gpu, gpu_error = None, None
+    if a.backend == "vgpu":
+        gpu = vgpu.VirtualGPU(a.gpu, realtime=True)
+        try:
+            gpu.load_model(a.model)
+        except vgpu.VGPUError as e:
+            gpu_error = str(e)
+    last_t = time.perf_counter()
+
     results = []
     state, throttle = "OFF", 1.0
-    print(f"[node {a.id}] pid={os.getpid()} backend={a.backend} speed={a.speed}", flush=True)
+    print(f"[node {a.id}] pid={os.getpid()} backend={a.backend} gpu={a.gpu if gpu else '-'} speed={a.speed}", flush=True)
     while True:
+        if gpu:  # 작업 없이 흐른 시간만큼 유휴 전력·냉각 반영
+            now = time.perf_counter()
+            gpu.idle(now - last_t)
+            last_t = now
+        body = {"id": a.id, "results": results, "pid": os.getpid()}
+        if gpu:
+            body["gpu"] = gpu.telemetry()
+            body["error"] = gpu_error
         try:
-            resp = post(a.orch + "/node/poll", {"id": a.id, "results": results, "pid": os.getpid()})
+            resp = post(a.orch + "/node/poll", body)
             results = []
         except Exception as e:
             print(f"[node {a.id}] orchestrator 연결 실패: {e}", flush=True)
             time.sleep(1.0)
             continue
         state, throttle = resp.get("state", "OFF"), float(resp.get("throttle", 1.0))
+        if gpu and resp.get("power_limit_w") is not None:
+            gpu.set_power_limit(resp["power_limit_w"])
         unit = resp.get("unit")
         if state != "RUN" or not unit:
             time.sleep(0.25)
             continue
         t0 = time.perf_counter()
+        if gpu:
+            gpu.idle(t0 - last_t)
+            try:
+                out, ok = gpu.infer(vgpu.estimate_tokens(unit["prompt"]), a.n_predict), True
+            except vgpu.VGPUError as e:
+                out, ok = {"tokens": 0, "error": str(e)[:80]}, False
+            last_t = time.perf_counter()
+            results.append({"unit_id": unit["id"], "ok": ok, "ms": round((last_t - t0) * 1000), **out})
+            continue
         try:
             if a.backend == "llama":
                 out = run_llama(unit["prompt"], a.llama_url, a.n_predict)

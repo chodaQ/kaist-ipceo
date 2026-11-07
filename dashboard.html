@@ -41,6 +41,13 @@ button:hover{filter:brightness(.96)}
 select,input[type=range]{font:inherit}
 .ev{font-size:12.5px;line-height:1.7;max-height:190px;overflow:auto}
 .note{font-size:12px;color:var(--mute);margin-top:6px}
+.vg{margin-top:10px;padding:8px 10px;border-radius:10px;background:#f3f6fb;border:1px dashed var(--line)}
+.vg.err{background:#fff0f0;color:#c0392b;font-size:12.5px}
+.vgh{font-size:12px;font-weight:700;color:var(--navy)}
+.bdg{font-size:10.5px;font-weight:700;border-radius:999px;padding:1px 7px;background:#dfe6f0;color:#5b6b7f;margin-left:4px}
+.bdg.real{background:#e2f5ea;color:#1a7a45}
+.out{margin-top:6px;font-size:12px;color:#333;background:#fff;border-radius:8px;padding:5px 8px;border:1px solid var(--line)}
+.vg em{font-style:normal;font-size:11.5px;color:var(--mute)}
 .warn{background:#fff8e6;border:1px solid #f1d58a;color:#7a5a00;border-radius:10px;padding:8px 12px;font-size:12.5px}
 @media(max-width:900px){.top,.bottom{grid-template-columns:1fr}}
 </style>
@@ -49,7 +56,7 @@ select,input[type=range]{font:inherit}
 <header>
   <h1>와트투비트 프로토타입</h1>
   <span class="tag" id="backend">mock</span>
-  <span class="tag">가상 GPU · 속도/전력은 프로파일 모사</span>
+  <span class="tag" id="model">가상 GPU</span>
   <div class="clock" id="clock">Day 1 09:00</div>
 </header>
 <main>
@@ -87,11 +94,12 @@ select,input[type=range]{font:inherit}
     </div>
     <div class="card"><h3>이벤트 로그</h3><div class="ev" id="ev"></div></div>
   </div>
-  <div class="warn">이 화면의 GPU 성능·소비전력·온수·태양광은 모두 모사 값입니다. 연산 자체는 이 PC 에서 실제로 실행되고, 가동·정지 제어와 작업 재배정은 실제 로직입니다. 한전 출력제한 신호는 연동하지 않았습니다.</div>
+  <div class="warn">'실측' 표시 노드: GPU 전력·온도·클럭은 nvidia-smi 실측, 추론은 llama.cpp 실제 실행. '가상' 노드: 공개 스펙 기반 모델. 태양광·가정 부하·배터리·온수는 어느 경우든 모사 값입니다. 가동·정지 제어와 작업 재배정은 실제 로직입니다. 한전 출력제한 신호는 연동하지 않았습니다.</div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const post=(a,extra={})=>fetch('/control',{method:'POST',body:JSON.stringify({action:a,...extra})});
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+const post=(a,extra={})=>fetch('/control',{method:'POST',headers:TOKEN?{'X-W2B-Token':TOKEN}:{},body:JSON.stringify({action:a,...extra})});
 let S=null, paused=false;
 $('speed').onchange=e=>post('speed',{value:e.target.value});
 $('pause').onclick=()=>post('pause',{value:!paused});
@@ -104,6 +112,20 @@ $('sub100').onclick=()=>post('submit',{value:100});
 $('auto').onchange=e=>post('auto_feed',{value:e.target.checked});
 $('reset').onclick=()=>post('reset');
 const STN={OFF:'정지',RUN:'가동',LOST:'이탈',HEAT_FULL:'온수 만땅'};
+const RSN={NONE:'최고 클럭',PWR_CAP:'전력 한도로 클럭↓',THERMAL:'열 제한',DUTY:'듀티 사이클',IDLE:'유휴'};
+function gpuBox(n){
+  const g=n.gpu_t;if(!g)return '';
+  if(n.gpu_error)return `<div class="vg err">⚠ ${n.gpu_error}</div>`;
+  const pl=n.state==='RUN'?Math.round(g.power_limit_w)+'W':'-';
+  const badge=g.measured?`<span class="bdg real">실측 · ${g.power_mode==='pl'?'nvidia-smi -pl':'duty 제어'}${g.hw_limit_w?' · HW '+Math.round(g.hw_limit_w)+'W':''}</span>`:'<span class="bdg">가상</span>';
+  return `<div class="vg"><div class="vgh">${g.gpu} · ${g.model||''} ${badge}</div>${n.host?`<div class="note">${n.host}</div>`:''}
+  <div class="kv"><span>클럭</span><span>${g.clock_mhz} MHz <em>${RSN[g.reason]||g.reason}</em></span>
+  <span>GPU 전력</span><span>${g.power_w.toFixed(0)} W / 한도 ${pl} (TDP ${g.tdp_w})</span>
+  <span>온도</span><span>${g.temp_c.toFixed(0)}°C</span>
+  <span>활용률 · 속도</span><span>${Math.round(g.util*100)}% · ${g.tok_s.toFixed(0)} tok/s</span>
+  <span>VRAM</span><span><div class="bar"><i style="width:${g.vram_used_gb/g.vram_total_gb*100}%"></i></div>${g.vram_used_gb} / ${g.vram_total_gb} GB</span></div>
+  ${n.last_text?`<div class="out">“${esc(n.last_text)}”</div>`:''}</div>`}
+function esc(t){return String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function fmtH(h){const H=Math.floor(h),M=Math.floor((h%1)*60);return String(H).padStart(2,'0')+':'+String(M).padStart(2,'0')}
 function draw(){
   const c=$('cv'),r=c.getBoundingClientRect(),dpr=devicePixelRatio||1;
@@ -124,7 +146,7 @@ function draw(){
 function render(){
   const s=S;paused=s.paused;
   $('clock').textContent='Day '+s.day+'  '+fmtH(s.hour)+(s.cloud?'  ☁ 구름':'')+(s.paused?'  ⏸':'');
-  $('backend').textContent='백엔드: '+s.backend;$('pause').textContent=s.paused?'재개':'일시정지';
+  $('backend').textContent='백엔드: '+s.backend;$('model').textContent=s.backend==='real'?'실제 GPU · nvidia-smi 실측':s.backend==='vgpu'?'가상 GPU · '+s.model:'GPU 속도/전력은 프로파일 모사';$('pause').textContent=s.paused?'재개':'일시정지';
   $('nodes').innerHTML=s.nodes.map(n=>{
     const st=n.state==='RUN'&&n.throttle<0.95?'THR':n.state;
     const lab=n.state==='RUN'&&n.throttle<0.95?'감속 '+Math.round(n.throttle*100)+'%':STN[n.state];
@@ -136,9 +158,13 @@ function render(){
     <span>노드 사용전력</span><span>${n.used.toFixed(2)} kW (최대 ${n.active_kw})</span>
     <span>온수 탱크</span><span><div class="bar tank"><i style="width:${Math.min(100,(n.tank-15)/50*100)}%"></i></div>${n.tank.toFixed(0)}°C</span>
     <span>완료 / 처리중</span><span>${n.done}건 / ${n.inflight}</span></div>
-    <div style="margin-top:8px;display:flex;gap:6px"><button class="dan" onclick="post('kill',{id:'${n.id}'})">강제 종료</button><button onclick="post('restart',{id:'${n.id}'})">재시작</button></div></div>`}).join('');
+    ${gpuBox(n)}
+    <div style="margin-top:8px;display:flex;gap:6px">${n.remote
+      ?`<button class="dan" onclick="post('kill',{id:'${n.id}'})">강제 이탈 15초</button>${n.alive?'':`<button onclick="post('forget',{id:'${n.id}'})">목록에서 제거</button>`}`
+      :`<button class="dan" onclick="post('kill',{id:'${n.id}'})">강제 종료</button><button onclick="post('restart',{id:'${n.id}'})">재시작</button>`}</div></div>`}).join('')
+    ||'<div class="card note">아직 접속한 노드가 없습니다. 각 GPU PC 에서 agent.py 를 실행하세요.</div>';
   $('queue').innerHTML=s.queue+'<small>건 대기</small>';$('inflight').textContent=s.inflight;$('done').textContent=s.total_done;
-  $('ups').textContent=s.units_per_s+' 건/초';$('tps').textContent=s.backend==='llama'?('토큰 '+s.tokens_per_s+'/초'):'';
+  $('ups').textContent=s.units_per_s+' 건/초';$('tps').textContent=s.backend!=='mock'?('토큰 '+s.tokens_per_s+'/초'):'';
   $('requeued').textContent=s.requeued+'건';
   const sur=s.nodes.reduce((a,n)=>a+n.surplus_kwh,0),used=s.nodes.reduce((a,n)=>a+n.used_kwh,0),grid=s.nodes.reduce((a,n)=>a+n.grid_kwh,0),heat=s.nodes.reduce((a,n)=>a+n.heat_kwh,0);
   $('util').innerHTML=(sur>0?Math.round(used/sur*100):0)+'<small>% 활용</small>';
