@@ -70,6 +70,9 @@ select,input[type=range]{font:inherit}
       <div class="line"><label>태양광 세기</label><input type="range" id="scale" min="0" max="150" value="100"><b id="scaleV">100%</b></div>
       <div class="line"><button id="cloud">구름 이벤트</button><label>시각 이동</label>
         <select id="hour"><option value="">--</option><option value="6">06시</option><option value="9">09시</option><option value="12">12시</option><option value="15">15시</option><option value="18">18시</option><option value="21">21시</option></select></div>
+      <div class="line"><label>전력망 수용 한도</label><input type="range" id="gcap" min="0" max="50" value="20"><b id="gcapV">2.0kW</b></div>
+      <div class="line"><label>가상 노드 GPU</label>
+        <select id="gmode"><option value="auto" selected>잉여만큼 자동 (최대 8장)</option><option value="1">1장 고정</option><option value="4">4장 고정</option></select></div>
       <div class="line"><button class="pri" id="sub20">작업 20건 접수</button><button id="sub100">100건</button>
         <label><input type="checkbox" id="auto"> 자동 공급</label></div>
       <div class="line"><button id="reset">통계 초기화</button></div>
@@ -111,6 +114,9 @@ $('sub20').onclick=()=>post('submit',{value:20});
 $('sub100').onclick=()=>post('submit',{value:100});
 $('auto').onchange=e=>post('auto_feed',{value:e.target.checked});
 $('reset').onclick=()=>post('reset');
+$('gcap').oninput=e=>{$('gcapV').textContent=(e.target.value/10).toFixed(1)+'kW'};
+$('gcap').onchange=e=>post('grid_cap',{value:e.target.value/10});
+$('gmode').onchange=e=>post('gpu_mode',{value:e.target.value});
 const STN={OFF:'정지',RUN:'가동',LOST:'이탈',HEAT_FULL:'온수 만땅'};
 const RSN={NONE:'최고 클럭',PWR_CAP:'전력 한도로 클럭↓',THERMAL:'열 제한',DUTY:'듀티 사이클',IDLE:'유휴'};
 function gpuBox(n){
@@ -120,7 +126,7 @@ function gpuBox(n){
   const badge=g.measured?`<span class="bdg real">실측 · ${g.power_mode==='pl'?'nvidia-smi -pl':'duty 제어'}${g.hw_limit_w?' · HW '+Math.round(g.hw_limit_w)+'W':''}</span>`:'<span class="bdg">가상</span>';
   return `<div class="vg"><div class="vgh">${g.gpu} · ${g.model||''} ${badge}</div>${n.host?`<div class="note">${n.host}</div>`:''}
   <div class="kv"><span>클럭</span><span>${g.clock_mhz} MHz <em>${RSN[g.reason]||g.reason}</em></span>
-  <span>GPU 전력</span><span>${g.power_w.toFixed(0)} W / 한도 ${pl} (TDP ${g.tdp_w})</span>
+  <span>GPU 전력${(g.gpus||1)>1?' ('+g.gpus+'장 합)':''}</span><span>${g.power_w.toFixed(0)} W / 한도 ${pl} (TDP ${g.tdp_w})</span>
   <span>온도</span><span>${g.temp_c.toFixed(0)}°C</span>
   <span>활용률 · 속도</span><span>${Math.round(g.util*100)}% · ${g.tok_s.toFixed(0)} tok/s</span>
   <span>VRAM</span><span><div class="bar"><i style="width:${g.vram_used_gb/g.vram_total_gb*100}%"></i></div>${g.vram_used_gb} / ${g.vram_total_gb} GB</span></div>
@@ -148,14 +154,16 @@ function render(){
   $('clock').textContent='Day '+s.day+'  '+fmtH(s.hour)+(s.cloud?'  ☁ 구름':'')+(s.paused?'  ⏸':'');
   $('backend').textContent='백엔드: '+s.backend;$('model').textContent=s.backend==='real'?'실제 GPU · nvidia-smi 실측':s.backend==='vgpu'?'가상 GPU · '+s.model:'GPU 속도/전력은 프로파일 모사';$('pause').textContent=s.paused?'재개':'일시정지';
   $('nodes').innerHTML=s.nodes.map(n=>{
-    const st=n.state==='RUN'&&n.throttle<0.95?'THR':n.state;
-    const lab=n.state==='RUN'&&n.throttle<0.95?'감속 '+Math.round(n.throttle*100)+'%':STN[n.state];
+    const capped=n.state==='RUN'&&n.gpu_t&&(n.gpu_t.reason==='PWR_CAP'||n.gpu_t.reason==='DUTY');
+    const st=n.vent&&n.state==='RUN'?'HEAT_FULL':(capped||(n.state==='RUN'&&!n.gpu_t&&n.throttle<0.95))?'THR':n.state;
+    const lab=n.vent&&n.state==='RUN'?'가동 · 온수 가득→방열':capped?'가동 · 전력 한도로 감속':(n.state==='RUN'&&!n.gpu_t&&n.throttle<0.95)?'감속 '+Math.round(n.throttle*100)+'%':STN[n.state];
     return `<div class="card n"><span class="st ${st}">${lab}</span><b class="name">${n.name}</b>
     <div class="note">${n.reason||''}</div>
     <div class="kv"><span>발전 / 부하</span><span>${n.solar.toFixed(2)} / ${n.load.toFixed(2)} kW</span>
     <span>배터리</span><span><div class="bar"><i style="width:${n.soc*100}%"></i></div>${Math.round(n.soc*100)}%</span>
+    <span>전력망 판매</span><span>${(n.export||0).toFixed(2)} kW</span>
     <span>잉여(출력제한)</span><span style="color:${n.curtailed?'#ff3131':'inherit'};font-weight:${n.curtailed?800:400}">${n.avail.toFixed(2)} kW ${n.curtailed?'◀ 출력제한':''}</span>
-    <span>노드 사용전력</span><span>${n.used.toFixed(2)} kW (최대 ${n.active_kw})</span>
+    <span>노드 사용전력</span><span>${n.used.toFixed(2)} kW${n.state==='RUN'?' · GPU '+(n.gpus||1)+'장':''}</span>
     <span>온수 탱크</span><span><div class="bar tank"><i style="width:${Math.min(100,(n.tank-15)/50*100)}%"></i></div>${n.tank.toFixed(0)}°C</span>
     <span>완료 / 처리중</span><span>${n.done}건 / ${n.inflight}</span></div>
     ${gpuBox(n)}
@@ -166,9 +174,12 @@ function render(){
   $('queue').innerHTML=s.queue+'<small>건 대기</small>';$('inflight').textContent=s.inflight;$('done').textContent=s.total_done;
   $('ups').textContent=s.units_per_s+' 건/초';$('tps').textContent=s.backend!=='mock'?('토큰 '+s.tokens_per_s+'/초'):'';
   $('requeued').textContent=s.requeued+'건';
+  if(document.activeElement!==$('gcap')){$('gcap').value=Math.round(s.grid_cap*10);$('gcapV').textContent=s.grid_cap.toFixed(1)+'kW';}
+  if(document.activeElement!==$('gmode'))$('gmode').value=s.gpu_mode;
+  const vent=s.nodes.reduce((a,n)=>a+(n.vent_kwh||0),0);
   const sur=s.nodes.reduce((a,n)=>a+n.surplus_kwh,0),used=s.nodes.reduce((a,n)=>a+n.used_kwh,0),grid=s.nodes.reduce((a,n)=>a+n.grid_kwh,0),heat=s.nodes.reduce((a,n)=>a+n.heat_kwh,0);
   $('util').innerHTML=(sur>0?Math.round(used/sur*100):0)+'<small>% 활용</small>';
-  $('sur').textContent=sur.toFixed(2)+' kWh';$('used').textContent=used.toFixed(2)+' kWh';$('grid').textContent=grid.toFixed(3)+' kWh';$('heat').textContent=heat.toFixed(2)+' kWh';
+  $('sur').textContent=sur.toFixed(2)+' kWh';$('used').textContent=used.toFixed(2)+' kWh';$('grid').textContent=grid.toFixed(3)+' kWh';$('heat').textContent=heat.toFixed(2)+' kWh'+(vent>0.01?' (방열 '+vent.toFixed(2)+')':'');
   $('ev').innerHTML=s.events.map(e=>'<div>'+e+'</div>').join('');
   draw();
 }

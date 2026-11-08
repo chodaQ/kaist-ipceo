@@ -22,11 +22,25 @@ HEARTBEAT_DEAD = 2.5 # 이 시간 poll 이 없으면 노드 이탈로 간주
 # gpu_key: vgpu.GPUS 의 키, system_w: GPU 를 뺀 나머지 PC(CPU·보드·PSU 손실) 소비전력
 # active_kw/idle_kw 는 가상 GPU 스펙(TDP·유휴전력) + system_w 로 계산한다.
 PROFILES = [
+    # B 는 팀 실제 장비 사양, A·C·D 는 비교용 가상 장비 (simulator3d.html 과 같은 구성)
     dict(id="A", name="A동 · 5090급", gpu="5090급", gpu_key="5090", system_w=80, speed=1.00, solar_kw=5.0, batt_kwh=8.0),
-    dict(id="B", name="B동 · 3060급", gpu="3060급", gpu_key="3060", system_w=50, speed=0.45, solar_kw=3.0, batt_kwh=8.0),
-    dict(id="C", name="C동 · 3060급", gpu="3060급", gpu_key="3060", system_w=50, speed=0.45, solar_kw=4.0, batt_kwh=8.0),
-    dict(id="D", name="D동 · 1080급", gpu="1080급", gpu_key="1080", system_w=50, speed=0.35, solar_kw=3.0, batt_kwh=8.0),
+    dict(id="B", name="B동 · 3080", gpu="3080", gpu_key="3080", system_w=90, speed=0.45, solar_kw=4.0, batt_kwh=8.0),
+    dict(id="C", name="C동 · 4080", gpu="4080", gpu_key="4080", system_w=70, speed=0.50, solar_kw=3.0, batt_kwh=8.0),
+    dict(id="D", name="D동 · 4080", gpu="4080", gpu_key="4080", system_w=70, speed=0.50, solar_kw=3.0, batt_kwh=8.0),
 ]
+MAX_GPUS = 8          # 가상 노드가 잉여에 맞춰 켤 수 있는 최대 GPU 장수
+GRID_CAP_KW = 2.0     # 가구당 전력망이 받아주는 상한(배전망 수용 한도). 넘는 몫이 출력제한 잉여
+_FULL_W = {}
+
+
+def gpu_full_power(key, model="7B"):
+    """GPU 한 장이 전력 제한 없이 디코드할 때 쓰는 전력(W) — 가상 GPU 로 한 번 계산해 캐시."""
+    if (key, model) not in _FULL_W:
+        g = vgpu.VirtualGPU(key, realtime=False)
+        g.load_model(model)
+        r = g.infer(16, 256)          # 생성(디코드) 위주로 재야 실제 작업 전력과 맞음
+        _FULL_W[(key, model)] = r["energy_j"] / r["gpu_s"]
+    return _FULL_W[(key, model)]
 for _p in PROFILES:
     _g = vgpu.GPUS[_p["gpu_key"]]
     _p["active_kw"] = round((_p["system_w"] + _g["tdp_w"]) / 1000, 3)
@@ -90,6 +104,11 @@ class Node:
         self.power_limit_w = 0.0 # 가상 GPU 에 내려보내는 전력 한도
         self.gpu = None          # 가상 GPU 텔레메트리 (노드가 보고)
         self.gpu_error = None
+        self.export_kw = 0.0     # 전력망 판매(수용 한도까지)
+        self.gpus = 1            # 가동 GPU 장수 (가상 노드는 잉여에 맞춰 자동)
+        self.gpu_up_since = None
+        self.vent = False        # 온수 가득 → 열을 외부로 방열하며 연산 계속
+        self.vent_kwh = 0.0
         self.remote = bool(p.get("remote"))
         self.info = {}
         self.cmd = None          # 원격 노드에 보낼 1회성 명령 (장애 주입 등)
@@ -110,6 +129,8 @@ class World:
         self.solar_scale = 1.0
         self.cloud_until = 0.0
         self.auto_feed = False
+        self.grid_cap = GRID_CAP_KW
+        self.gpu_mode = "auto"     # "auto" 또는 고정 장수 "1","4"
         self.queue = deque()
         self.unit_seq = 0
         self.events = deque(maxlen=14)
@@ -231,7 +252,7 @@ class World:
                 unit = self.queue.popleft()
                 n.inflight[unit["id"]] = unit
             n.busy = bool(n.inflight)
-            return {"state": n.state, "throttle": round(n.throttle, 3), "unit": unit,
+            return {"state": n.state, "throttle": round(n.throttle, 3), "unit": unit, "gpus": n.gpus,
                     "power_limit_w": round(n.power_limit_w, 1) if (n.state == "RUN" or not n.remote) else None}
 
     # ---------------- 틱 ----------------
@@ -287,29 +308,41 @@ class World:
             avail = max(0.0, net - absorbed)
         else:
             n.soc = clamp(n.soc - (-net) * dt_h / eff / p["batt_kwh"], 0, 1)
+        # 배터리 다음엔 전력망 판매(수용 한도까지), 그래도 남는 몫이 출력제한 잉여
+        n.export_kw = min(avail, self.grid_cap)
+        avail -= n.export_kw
         n.avail_kw = avail
-        n.curtailed = avail > 0.05 and n.soc >= 0.985
+        n.curtailed = avail > 0.05
 
         # 노드 제어 (실시간 기준 히스테리시스)
         act, idl = p["active_kw"], p["idle_kw"]
+        # 최소 가동 전력 = 나머지 PC + GPU 1장 유휴 + 여유 15W. 이것만 넘으면 전력 한도(필요시 듀티)로 잉여 안에서 돌 수 있음
+        gidle = vgpu.GPUS[p["gpu_key"]]["idle_w"] if p.get("gpu_key") in vgpu.GPUS else float(n.info.get("idle_w") or 10)
+        min_w = p["system_w"] + gidle + 15
+        capped_ctl = self.backend == "vgpu" or n.remote     # 전력 한도로 소비를 잉여에 맞출 수 있는 노드
         # 전력 한도(power limit): 잉여 안에서만 쓰도록 연산 강도를 정함
         thr = clamp((avail - idl) / (act - idl), 0.0, 1.0) if act > idl else 0.0
         if n.state in ("RUN",):
             n.throttle = max(thr, 0.0)
             n.low_since = (n.low_since or now) if thr < 0.25 else None
-            if n.tank_c >= TANK_MAX_C:
-                n.state, n.reason, n.since = "HEAT_FULL", "온수 가득(열 환원 불가)", now
-                self.log(f"노드 {n.id} 정지: 온수 탱크 {n.tank_c:.0f}°C")
-            elif n.low_since and now - n.low_since > 1.0 and now - n.since > 4.0:
+            # 잉여가 PC + GPU 1장 유휴도 못 대면 0.3초 만에 정지 (그 전까지는 전력 한도로 잉여 안에서 계속 돎)
+            starving = avail * 1000 < p["system_w"] + gidle
+            n.starve_since = (getattr(n, "starve_since", None) or now) if starving else None
+            if n.starve_since and now - n.starve_since > 0.3:
+                n.state, n.reason, n.since = "OFF", "잉여전력 부족", now
+                n.hold_start, n.starve_since = None, None
+                self.log(f"노드 {n.id} 정지: 잉여 {avail:.2f}kW")
+            elif not capped_ctl and n.low_since and now - n.low_since > 1.0 and now - n.since > 4.0:
                 n.state, n.reason, n.since = "OFF", "잉여전력 부족", now
                 n.hold_start = None
                 self.log(f"노드 {n.id} 정지: 잉여 {avail:.2f}kW")
         elif n.state in ("OFF", "HEAT_FULL") and n.alive:
             if n.state == "HEAT_FULL" and n.tank_c > TANK_RESUME_C:
                 pass
-            elif thr >= 0.5 and n.curtailed:
+            elif n.curtailed and (avail * 1000 >= min_w if capped_ctl else thr >= 0.5):
                 n.hold_start = n.hold_start or now
-                if now - n.hold_start > 1.5:
+                # 전력 한도로 잉여 안에서만 도는 노드는 켜졌다 꺼져도 손해가 없어 0.1초만 확인
+                if now - n.hold_start > (0.1 if capped_ctl else 1.5):
                     n.state, n.reason, n.since = "RUN", "출력제한 감지 → 가동", now
                     n.throttle, n.low_since = thr, None
                     self.log(f"노드 {n.id} 가동 (잉여 {avail:.2f}kW)")
@@ -318,12 +351,38 @@ class World:
                 if n.state == "OFF":
                     n.reason = "잉여 없음" if not n.curtailed else "대기"
 
-        # 가상 GPU 전력 한도 = 잉여전력 - 나머지 PC 소비전력
-        n.power_limit_w = max(0.0, avail * 1000 - p["system_w"]) if n.state == "RUN" else 0.0
+        # 가상 GPU 전력 한도 = 잉여전력 - 나머지 PC 소비전력 (가동 GPU 전체 합)
+        gpu_w = max(0.0, avail * 1000 - p["system_w"])
+        n.power_limit_w = gpu_w if n.state == "RUN" else 0.0
+        # 가동 GPU 장수: 가상 노드는 잉여를 남김없이 쓸 만큼 자동(즉시). 실제 노드는 1장
+        if n.remote or not p.get("gpu_key"):
+            n.gpus = 1
+        elif self.gpu_mode != "auto":
+            n.gpus = int(self.gpu_mode)
+        else:
+            want = max(1, min(MAX_GPUS, math.ceil(gpu_w / gpu_full_power(p["gpu_key"], self.model) - 1e-6)))
+            # 되먹임: 켜진 GPU 가 한도에 안 걸린 채(최고 클럭) 잉여를 30W 넘게 남기면 한 장 더
+            if (n.state == "RUN" and n.gpu and n.gpu.get("reason") == "NONE" and n.gpus < MAX_GPUS
+                    and n.used_kw * 1000 < avail * 1000 - 30 and want <= n.gpus):
+                want = n.gpus + 1
+            if n.state != "RUN":
+                n.gpus, n.gpu_up_since = want, None
+            else:
+                n.gpus, n.gpu_up_since = want, None    # 잉여에 맞춰 바로 (한도로 묶여 있어 잉여를 넘지 않음)
 
         # 전력/열 계산
-        if n.state == "RUN" and n.gpu and (self.backend == "vgpu" or n.remote):
-            n.used_kw = (p["system_w"] + n.gpu["power_w"]) / 1000   # GPU 가 보고한 소비(실측 또는 가상)
+        if n.state == "RUN" and n.gpu and n.remote:
+            n.used_kw = (p["system_w"] + n.gpu["power_w"]) / 1000   # 실측 GPU 전력
+        elif n.state == "RUN" and n.gpu and self.backend == "vgpu":
+            # 가상 GPU: 보고값은 poll 주기만큼 늦으므로, 실제 GPU 처럼 하드웨어 전력 한도가 즉시 지켜진다고 보고 한도로 자름
+            # 보고는 직전 장수 기준이라 장당 전력으로 바꿔 현재 장수를 곱함 (장수가 바뀐 직후의 과소 집계 방지)
+            idle_w = vgpu.GPUS[p["gpu_key"]]["idle_w"] * n.gpus
+            per_gpu = n.gpu["power_w"] / max(1, int(n.gpu.get("gpus") or 1))
+            gpu_draw = per_gpu * n.gpus
+            # 작업 중인데 보고가 아직 유휴(가동 직후)이거나 전력 한도에 걸린 상태면, 실제 GPU 처럼 한도만큼 끌어 씀
+            if n.busy and n.gpu.get("reason") in ("IDLE", "PWR_CAP", "DUTY"):
+                gpu_draw = n.power_limit_w
+            n.used_kw = (p["system_w"] + min(gpu_draw, max(n.power_limit_w, idle_w))) / 1000
         elif n.state == "RUN":
             n.used_kw = p["idle_kw"] + (act - p["idle_kw"]) * n.throttle if n.busy else p["idle_kw"]
         else:
@@ -332,11 +391,15 @@ class World:
             n.surplus_kwh += avail * dt_h
             n.used_kwh += min(n.used_kw, avail) * dt_h
             n.grid_kwh += max(0.0, n.used_kw - avail) * dt_h
-            n.heat_kwh += n.used_kw * dt_h
-            # 온수 탱크: 열 유입 - 손실, 7시·21시 사용(온수 60L)
+            # 온수 탱크: 열 유입 - 손실, 7시·21시 사용. 가득(65°C)이면 연산은 계속하고 열은 외부로 방열
             mass = TANK_L
-            n.tank_c += (n.used_kw * 3600 * dt_h) / (mass * 4.186)
+            n.vent = n.used_kw > 0 and n.tank_c >= TANK_MAX_C - 0.05
+            heat_in = 0.0 if n.vent else n.used_kw
+            n.heat_kwh += heat_in * dt_h
+            n.vent_kwh += (n.used_kw - heat_in) * dt_h
+            n.tank_c += (heat_in * 3600 * dt_h) / (mass * 4.186)
             n.tank_c -= (n.tank_c - 20.0) * 0.012 * dt_h
+            n.tank_c = min(n.tank_c, TANK_MAX_C)
             for use_h in (7.0, 21.0):
                 prev = (h - dt_h) % 24
                 if (prev < use_h <= h) or (prev > h and (use_h > prev or use_h <= h)):
@@ -355,6 +418,7 @@ class World:
             return {
                 "hour": round(self.hour, 3), "day": self.day, "speed": self.speed, "paused": self.paused,
                 "solar_scale": self.solar_scale, "cloud": now < self.cloud_until, "auto_feed": self.auto_feed,
+                "grid_cap": self.grid_cap, "gpu_mode": self.gpu_mode, "max_gpus": MAX_GPUS,
                 "backend": self.backend, "model": vgpu.MODELS[self.model]["name"], "curve": curve,
                 "queue": len(self.queue), "inflight": sum(len(n.inflight) for n in self.nodes.values()),
                 "total_done": self.total_done, "requeued": self.requeued,
@@ -366,6 +430,7 @@ class World:
                     "solar": round(n.solar_now, 2), "load": round(n.load_now, 2), "soc": round(n.soc, 3),
                     "avail": round(n.avail_kw, 2), "curtailed": n.curtailed, "used": round(n.used_kw, 2),
                     "tank": round(n.tank_c, 1), "done": n.done, "inflight": len(n.inflight),
+                    "export": round(n.export_kw, 2), "gpus": n.gpus, "vent": n.vent, "vent_kwh": round(n.vent_kwh, 3),
                     "heat_kwh": round(n.heat_kwh, 3), "surplus_kwh": round(n.surplus_kwh, 3),
                     "used_kwh": round(n.used_kwh, 3), "grid_kwh": round(n.grid_kwh, 4),
                     "active_kw": n.p["active_kw"], "system_w": n.p["system_w"],
@@ -384,6 +449,14 @@ class World:
             elif a == "solar_scale":
                 self.solar_scale = clamp(float(c["value"]), 0.0, 1.5)
                 self.log(f"태양광 세기 {self.solar_scale*100:.0f}%로 조정")
+            elif a == "grid_cap":
+                self.grid_cap = clamp(float(c["value"]), 0.0, 10.0)
+                self.log(f"전력망 수용 한도 {self.grid_cap:.1f}kW/가구")
+            elif a == "gpu_mode":
+                v = str(c["value"])
+                if v == "auto" or (v.isdigit() and 1 <= int(v) <= MAX_GPUS):
+                    self.gpu_mode = v
+                    self.log("가상 노드 GPU: " + ("잉여만큼 자동" if v == "auto" else v + "장 고정"))
             elif a == "cloud":
                 self.cloud_until = time.time() + 12
                 self.log("구름 이벤트: 발전량 20%로 급감 (12초)")
@@ -409,7 +482,7 @@ class World:
             elif a == "reset":
                 for n in self.nodes.values():
                     n.done = n.tokens = 0
-                    n.surplus_kwh = n.used_kwh = n.grid_kwh = n.heat_kwh = 0.0
+                    n.surplus_kwh = n.used_kwh = n.grid_kwh = n.heat_kwh = n.vent_kwh = 0.0
                     n.tank_c, n.soc = 45.0, 0.5
                 self.total_done = self.requeued = 0
                 self.queue.clear()
@@ -437,6 +510,9 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/state"):
             self._send(200, json.dumps(WORLD.state(), ensure_ascii=False))
+        elif self.path.split("?")[0] in ("/3d", "/simulator3d.html"):
+            with open(os.path.join(HERE, "simulator3d.html"), "rb") as f:
+                self._send(200, f.read(), "text/html")
         elif self.path.split("?")[0] in ("/", "/index.html"):
             with open(os.path.join(HERE, "dashboard.html"), "rb") as f:
                 self._send(200, f.read(), "text/html")

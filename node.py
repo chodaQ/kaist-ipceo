@@ -72,6 +72,7 @@ def main():
     results = []
     state, throttle = "OFF", 1.0
     print(f"[node {a.id}] pid={os.getpid()} backend={a.backend} gpu={a.gpu if gpu else '-'} speed={a.speed}", flush=True)
+    ngpu = 1   # 오케스트레이터가 정해 주는 가동 GPU 장수 (같은 GPU 여러 장을 병렬로 모사)
     while True:
         if gpu:  # 작업 없이 흐른 시간만큼 유휴 전력·냉각 반영
             now = time.perf_counter()
@@ -79,7 +80,14 @@ def main():
             last_t = now
         body = {"id": a.id, "results": results, "pid": os.getpid()}
         if gpu:
-            body["gpu"] = gpu.telemetry()
+            t = gpu.telemetry()
+            # 같은 GPU ngpu 장이 같은 일을 나눠 한다고 보고 전력·속도를 장수만큼 합산
+            t["power_w"] = round(t["power_w"] * ngpu, 1)
+            t["power_limit_w"] = round(t["power_limit_w"] * ngpu, 1)
+            t["tdp_w"] = t["tdp_w"] * ngpu
+            t["tok_s"] = round(t["tok_s"] * ngpu, 1)
+            t["gpus"] = ngpu
+            body["gpu"] = t
             body["error"] = gpu_error
         try:
             resp = post(a.orch + "/node/poll", body)
@@ -89,17 +97,22 @@ def main():
             time.sleep(1.0)
             continue
         state, throttle = resp.get("state", "OFF"), float(resp.get("throttle", 1.0))
-        if gpu and resp.get("power_limit_w") is not None:
-            gpu.set_power_limit(resp["power_limit_w"])
+        if gpu:
+            ngpu = max(1, int(resp.get("gpus") or 1))
+            if resp.get("power_limit_w") is not None:
+                gpu.set_power_limit(resp["power_limit_w"] / ngpu)   # 장당 한도
         unit = resp.get("unit")
         if state != "RUN" or not unit:
-            time.sleep(0.25)
+            time.sleep(0.1)
             continue
         t0 = time.perf_counter()
         if gpu:
             gpu.idle(t0 - last_t)
             try:
                 out, ok = gpu.infer(vgpu.estimate_tokens(unit["prompt"]), a.n_predict), True
+                out["tokens"] *= ngpu            # ngpu 장이 동시에 처리
+                out["energy_j"] = round(out["energy_j"] * ngpu, 2)
+                out["gpus"] = ngpu
             except vgpu.VGPUError as e:
                 out, ok = {"tokens": 0, "error": str(e)[:80]}, False
             last_t = time.perf_counter()

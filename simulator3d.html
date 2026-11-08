@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>와트투비트 시뮬레이터</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
+<style>
+/* 와트투비트 3D.html 과 같은 디자인 토큰 */
+:root{
+  --bg:#edf0f3;--panel:#ffffff;--ink:#132029;--muted:#566774;--line:#d2d9e0;--track:#e3e8ed;
+  --energy:#c4800f;--compute:#5f4fd8;--heat:#cf5526;--cut:#c4352f;--ok:#2a8456;--house:#7b8a96;
+  --font-ui:"IBM Plex Sans KR",system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --font-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0c131a;--panel:#131c25;--ink:#e5ecf2;--muted:#91a1ae;--line:#24313d;--track:#1f2a35;
+  --energy:#f0b04c;--compute:#9d91f6;--heat:#f0845a;--cut:#ef6a64;--ok:#5cc28d;--house:#93a3b1;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0c131a;--panel:#131c25;--ink:#e5ecf2;--muted:#91a1ae;--line:#24313d;--track:#1f2a35;
+  --energy:#f0b04c;--compute:#9d91f6;--heat:#f0845a;--cut:#ef6a64;--ok:#5cc28d;--house:#93a3b1;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1280px;margin:0 auto;padding-block:28px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+.head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 40px}
+.head>div{min-width:0}
+.eyebrow{font-family:var(--font-num);font-size:12px;letter-spacing:.06em;color:var(--muted)}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.08;margin:6px 0 0;font-weight:600;letter-spacing:-.02em}
+h1 small{font-family:var(--font-num);font-size:.36em;font-weight:400;color:var(--muted);margin-left:10px;vertical-align:.5em}
+.lede{max-width:56ch;margin:0;color:var(--muted)}
+h2{font-size:15px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+h2 span{font-family:var(--font-num);font-size:12px;font-weight:400;color:var(--muted)}
+
+.stage{position:relative;height:clamp(440px,68vh,760px);border-radius:16px;overflow:hidden;background:#0b1220;border:1px solid var(--line)}
+.stage canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+.stage canvas:active{cursor:grabbing}
+#labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.lbl{position:absolute;left:0;top:0;display:flex;align-items:center;gap:6px;padding:3px 10px 3px 8px;border-radius:999px;background:rgba(8,13,19,.76);color:#f3f6f8;font-size:12px;white-space:nowrap;border:1px solid rgba(255,255,255,.14);will-change:transform}
+.lbl i{width:7px;height:7px;border-radius:50%;background:var(--c,#8a97a3);flex:none}
+.lbl.sel{border-color:rgba(157,145,246,.9)}
+.hud{position:absolute;color:#f3f6f8;background:rgba(8,13,19,.66);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:8px 12px}
+.hud.tl{top:12px;left:12px;display:flex;align-items:baseline;gap:10px}
+.clock{font-family:var(--font-num);font-size:22px;font-variant-numeric:tabular-nums;font-weight:500;line-height:1}
+.phase{font-size:13px;color:#c3cdd6}
+.hud.tr{top:12px;right:12px;display:flex;align-items:center;gap:8px;font-size:13px;max-width:calc(100% - 220px)}
+.hud.tr i{width:8px;height:8px;border-radius:50%;background:#8a97a3;flex:none}
+.hud.tr.cut{border-color:rgba(239,106,100,.65)}
+.hud.tr.cut i{background:#ef6a64;animation:pulse 1s infinite}
+.hud.tr.node i{background:#a397ff}
+.hud.tr.ok i{background:#5cc28d}
+.hud.bl{left:12px;bottom:12px;font-size:12px;color:#c3cdd6;padding:6px 10px}
+.hud.br{right:12px;bottom:12px;font-size:12px;color:#c3cdd6;padding:6px 10px;display:flex;flex-wrap:wrap;gap:4px 12px;max-width:calc(100% - 300px)}
+.hud.br span{display:inline-flex;align-items:center;gap:5px}
+.hud.br i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.loading{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:#c3cdd6;font-size:14px;background:#0b1220}
+@keyframes pulse{50%{opacity:.3}}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;min-width:0}
+.controls{display:flex;flex-direction:column;gap:12px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.slider{flex:1 1 240px;min-width:0;display:flex;flex-direction:column;gap:0}
+.slider label{font-size:13px;color:var(--muted);display:flex;justify-content:space-between}
+.slider label b{font-family:var(--font-num);font-weight:500;color:var(--ink)}
+.slider input{width:100%;accent-color:var(--energy);margin:0;height:26px}
+.ticks{display:flex;justify-content:space-between;font-family:var(--font-num);font-size:11px;color:var(--muted)}
+.btn,.chip{font:inherit;font-size:14px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;height:38px;padding:0 14px;cursor:pointer}
+.btn:hover,.chip:hover{border-color:var(--muted)}
+.btn:focus-visible,.chip:focus-visible,.switch:focus-visible,.slider input:focus-visible{outline:2px solid var(--compute);outline-offset:2px}
+.btn.play{min-width:96px;font-weight:500}
+.btn.warn{color:var(--cut);border-color:color-mix(in srgb,var(--cut) 45%,var(--line))}
+.chip{height:32px;font-size:13px;padding:0 12px;border-radius:999px}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.seg{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.seg>span{font-size:13px;color:var(--muted);margin-right:4px}
+.switch{display:inline-flex;align-items:center;gap:10px;font:inherit;font-size:14px;color:var(--ink);background:none;border:0;padding:4px 0;cursor:pointer}
+.switch .track{width:40px;height:22px;border-radius:999px;background:var(--track);border:1px solid var(--line);position:relative;transition:background .2s}
+.switch .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:transform .2s,background .2s}
+.switch[aria-checked="true"] .track{background:color-mix(in srgb,var(--compute) 30%,var(--track))}
+.switch[aria-checked="true"] .track::after{transform:translateX(18px);background:var(--compute)}
+
+.houses{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.hcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;cursor:pointer;min-width:0}
+.hcard.sel{border-color:var(--compute);box-shadow:0 0 0 1px var(--compute) inset}
+.hcard header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hcard header b{font-size:16px}
+.hcard .gpu{font-size:12px;color:var(--muted)}
+.st{margin-left:auto;font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;color:#fff;background:#7b8a96}
+.st.RUN{background:var(--compute)}.st.LOST{background:var(--cut)}.st.HEAT_FULL{background:var(--heat)}.st.CAP{background:#7a6be0}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;margin:8px 0;font-size:13px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;text-align:right;font-family:var(--font-num);font-size:12.5px;font-variant-numeric:tabular-nums}
+.kv dd.cut{color:var(--cut);font-weight:500}
+.hcard .btn{height:32px;font-size:13px;width:100%}
+
+.grid3{display:grid;grid-template-columns:1.05fr 1fr 1fr;gap:14px}
+@media (max-width:1000px){.grid3{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
+th{font-weight:500;color:var(--muted);font-size:12.5px}
+td.n,th.n{text-align:right;font-family:var(--font-num);font-size:12.5px;font-variant-numeric:tabular-nums}
+td.bad{color:var(--cut)}td.hi{color:var(--compute);font-weight:500}
+canvas.chart{width:100%;height:210px;display:block}
+.chartnote{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+.chartnote b{color:var(--ink);font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted);margin-top:6px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:3px;border-radius:2px;background:var(--c)}
+.ev{font-size:12.5px;line-height:1.75;max-height:180px;overflow:auto;font-family:var(--font-num)}
+.note{font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.6}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (max-width:640px){.hud.tr{top:auto;bottom:12px;left:12px;right:12px;max-width:none}.hud.bl,.hud.br{display:none}}
+@media (prefers-reduced-motion: reduce){.hud.tr.cut i{animation:none}.switch .track,.switch .track::after{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div>
+      <div class="eyebrow">시스템 시뮬레이션 · 단독주택 4가구 · 맑은 하루</div>
+      <h1>와트투비트<small>Watt-to-Bit Simulator</small></h1>
+    </div>
+    <p class="lede">전력망이 받아주지 못해 버려질 태양광 전기만 골라 각 집의 GPU 노드가 AI 연산으로 바꾸고, 그 열로 물을 데웁니다. 노드 제어·전력 한도·작업 재배정은 실제 오케스트레이터와 같은 규칙으로 움직입니다.</p>
+  </header>
+
+  <section class="stage" id="stage" aria-label="와트투비트 3D 장면">
+    <canvas id="gl"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+    <div class="hud tl"><div class="clock" id="clock">09:00</div><div class="phase" id="phase">오전 · Day 1</div></div>
+    <div class="hud tr" id="status" role="status"><i></i><span id="statusText">계산 중</span></div>
+    <div class="hud bl">드래그 회전 · 휠/핀치 확대 · 집을 눌러 선택</div>
+    <div class="hud br" aria-hidden="true">
+      <span style="--c:#e8a53a"><i></i>전기</span><span style="--c:#5cc28d"><i></i>전력망 판매</span>
+      <span style="--c:#8f7dff"><i></i>AI 작업</span><span style="--c:#ff7a45"><i></i>폐열→온수</span><span style="--c:#ef5b55"><i></i>버려지는 전기</span>
+    </div>
+    <div class="loading" id="loading">3D 장면을 불러오는 중</div>
+  </section>
+
+  <section class="panel controls" aria-label="시뮬레이션 조작">
+    <div class="row">
+      <button class="btn play" id="play" type="button">일시정지</button>
+      <div class="slider" style="flex-basis:360px">
+        <label for="hour">시각 <b id="hourV">09:00</b></label>
+        <input id="hour" type="range" min="0" max="23.99" step="0.01" value="9">
+        <div class="ticks" aria-hidden="true"><span>0시</span><span>6시</span><span>12시</span><span>18시</span><span>24시</span></div>
+      </div>
+      <div class="seg" role="group" aria-label="속도"><span>속도</span>
+        <button class="chip" type="button" data-speed="0.12" aria-pressed="false">느리게</button>
+        <button class="chip" type="button" data-speed="0.4" aria-pressed="true">보통</button>
+        <button class="chip" type="button" data-speed="1.2" aria-pressed="false">빠르게</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="slider"><label for="solar">태양광 세기 <b id="solarV">100%</b></label><input id="solar" type="range" min="0" max="150" step="5" value="100"></div>
+      <div class="slider"><label for="cap">전력망 수용 한도 (가구당) <b id="capV">2.0 kW</b></label><input id="cap" type="range" min="0" max="5" step="0.1" value="2"></div>
+      <button class="btn" id="cloud" type="button">구름 지나가기</button>
+    </div>
+    <div class="row">
+      <div class="seg" role="group" aria-label="노드당 GPU 수"><span>노드당 GPU</span>
+        <button class="chip" type="button" data-gpun="1" aria-pressed="false">1장 고정</button>
+        <button class="chip" type="button" data-gpun="4" aria-pressed="false">4장 고정</button>
+        <button class="chip" type="button" data-gpun="auto" aria-pressed="true">잉여만큼 자동 (최대 8장)</button>
+      </div>
+      <button class="switch" id="nodesOn" type="button" role="switch" aria-checked="true"><span class="track"></span><span>와트투비트 노드</span></button>
+      <button class="switch" id="demand" type="button" role="switch" aria-checked="true"><span class="track"></span><span>AI 작업 요청</span></button>
+      <button class="btn" id="reset" type="button">처음부터</button>
+    </div>
+    <div class="seg" role="group" aria-label="카메라 시점"><span>시점</span>
+      <button class="chip" type="button" data-view="all" aria-pressed="true">마을 전체</button>
+      <button class="chip" type="button" data-view="house" aria-pressed="false">선택한 집</button>
+      <button class="chip" type="button" data-view="grid" aria-pressed="false">전력망</button>
+      <button class="chip" type="button" data-view="dc" aria-pressed="false">데이터센터</button>
+    </div>
+  </section>
+
+  <section class="houses" id="houses" aria-label="가구별 상태"></section>
+
+  <div class="grid3">
+    <section class="panel" aria-label="오늘 합계">
+      <h2>오늘 합계<span id="dayTag">Day 1 · 0시부터</span></h2>
+      <table>
+        <thead><tr><th>항목</th><th class="n">노드 없음</th><th class="n">노드 있음</th></tr></thead>
+        <tbody>
+          <tr><td>태양광 발전</td><td class="n" id="t-solar0"></td><td class="n" id="t-solar1"></td></tr>
+          <tr><td>전력망 판매</td><td class="n" id="t-exp0"></td><td class="n" id="t-exp1"></td></tr>
+          <tr><td>출력제한 잉여 발생</td><td class="n" id="t-ex0"></td><td class="n" id="t-ex1"></td></tr>
+          <tr><td>버려진 전기</td><td class="n bad" id="t-lost0"></td><td class="n" id="t-lost1"></td></tr>
+          <tr><td>살려낸 전기</td><td class="n" id="t-abs0"></td><td class="n hi" id="t-abs1"></td></tr>
+          <tr><td>처리한 AI 연산</td><td class="n" id="t-tok0"></td><td class="n hi" id="t-tok1"></td></tr>
+          <tr><td>데운 물 (40℃ 상승)</td><td class="n" id="t-w0"></td><td class="n hi" id="t-w1"></td></tr>
+          <tr><td>잉여 외 전력 사용</td><td class="n" id="t-g0"></td><td class="n" id="t-g1"></td></tr>
+        </tbody>
+      </table>
+      <p class="note">노드가 쓰는 건 '버려질 전기'뿐이라 발전·판매는 두 경우가 같습니다. '잉여 외 전력 사용'은 0에 가까워야 정상입니다(노드가 멈추는 순간의 지연만큼만 생김).</p>
+    </section>
+
+    <section class="panel" aria-label="하루 전력 흐름 그래프">
+      <h2>하루 전력 흐름<span>마을 4가구 합계 · kW</span></h2>
+      <canvas class="chart" id="dayChart" role="img" aria-label="시각별 발전량, 전력망 판매, 출력제한 잉여, 노드 흡수량"></canvas>
+      <div class="legend">
+        <span style="--c:var(--energy)"><i></i>태양광 발전</span><span style="--c:var(--ok)"><i></i>전력망 판매</span>
+        <span style="--c:var(--cut)"><i></i>출력제한 잉여</span><span style="--c:var(--compute)"><i></i>노드가 흡수</span>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="GPU 전력 한도와 속도">
+      <h2>전력 한도 ↔ 속도<span id="gpuTag">RTX 3080</span></h2>
+      <canvas class="chart" id="gpuChart" role="img" aria-label="전력 한도별 생성 속도와 전력 효율"></canvas>
+      <div class="legend"><span style="--c:var(--compute)"><i></i>생성 속도 (tok/s)</span><span style="--c:var(--ok)"><i></i>1W당 처리량 (tok/J)</span><span style="--c:var(--heat)"><i></i>지금 동작점</span></div>
+      <p class="chartnote" id="gpuNote"></p>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>이벤트 기록<span>최근 12건</span></h2>
+    <div class="ev" id="ev"></div>
+    <p class="note">노드는 잉여를 남김없이 쓸 만큼 GPU를 켜고 전력 한도로 나눠 씁니다(자동, 최대 8장 — 잉여가 바뀌면 바로 맞춤). 온수 탱크가 65℃로 차면 연산은 계속하고 열은 밖으로 방열합니다. 가정: 7B 언어모델(Q4) 추론 기준 GPU 성능·전력은 공개 스펙 기반 모델(vgpu.py 와 같은 식)이고, 태양광·가정 부하·배터리 8 kWh·온수 탱크 120 L·폐열 회수율 80%는 원리를 보여주기 위한 가정값입니다. 실제 장비에서는 같은 규칙으로 nvidia-smi 실측과 llama.cpp 추론이 돌아갑니다(orchestrator.py · agent.py). B동은 팀 실제 장비(RTX 3080 서버) 사양이고, A동(RTX 5090)·C·D동(RTX 4080 16GB)은 비교용 가상 장비입니다.</p>
+  </section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id);};
+var reduce=!!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+/* ===================================================================== GPU 모델 (vgpu.py 이식) */
+var GPUS={
+  '5090': {name:'RTX 5090',        minMhz:600,boost:2407,tflops:209,bw:1792,vram:32,tdp:575,idle:30,ce:.40,me:.80,launch:6e-6,heatCap:1600,ssC:72},
+  '3080': {name:'RTX 3080',        minMhz:600,boost:1710,tflops:119,bw:760, vram:10,tdp:320,idle:18,ce:.40,me:.80,launch:7e-6,heatCap:900,ssC:75},
+  '4080': {name:'RTX 4080',        minMhz:600,boost:2505,tflops:194.9,bw:717,vram:16,tdp:320,idle:15,ce:.40,me:.80,launch:7e-6,heatCap:900,ssC:70}
+};
+var M7={params:7.24e9,wb:4.37e9,layers:32,hidden:4096,kvb:2*32*8*128*2};
+var V_MIN=.75,V_MAX=1.05,CORE_SHARE=.85,MEM_SHARE=.25,CORE_FLOOR=.55;
+var POS=300,FLOPS=2*M7.params+4*M7.layers*M7.hidden*POS,BYTES=M7.wb+M7.kvb*POS;
+function volt(g,f){var x=(f-g.minMhz)/(g.boost-g.minMhz);return V_MIN+(V_MAX-V_MIN)*Math.max(0,Math.min(1,x));}
+function gpuPower(g,f,uc,um){var dyn=g.tdp-g.idle,gg=(f/g.boost)*Math.pow(volt(g,f)/V_MAX,2),act=CORE_FLOOR+(1-CORE_FLOOR)*uc;return g.idle+dyn*(CORE_SHARE*1.08*act*gg+MEM_SHARE*um);}
+function timing(g,f){var tc=FLOPS/(g.tflops*1e12*g.ce*f/g.boost),tm=BYTES/(g.bw*1e9*g.me),t=Math.max(tc,tm)+g.launch;return [t,tc/t,tm/t];}
+var opCache={};
+/* 전력 한도(W) 안에서 디코드 정상상태 동작점: 가능한 최고 클럭, 안 되면 듀티 사이클 */
+function gpuAt(key,limitW){
+  limitW=Math.floor(limitW);var ck=key+'|'+limitW;   /* 내림: 한도를 넘지 않게 */if(opCache[ck])return opCache[ck];
+  var g=GPUS[key],f=g.boost,r,p;
+  for(;;){r=timing(g,f);p=gpuPower(g,f,r[1],r[2]);if(p<=limitW||f-15<g.minMhz)break;f-=15;}
+  var t=r[0],mode=f<g.boost?'PWR_CAP':'NONE',tps=1/t,pw=p;
+  /* 실제 GPU 는 클럭을 오르내리며 전력 한도에 딱 맞춤 → 한 단계 위 클럭과 섞어서 한도만큼 씀 */
+  if(mode==='PWR_CAP'&&p<=limitW){var r2=timing(g,f+15),p2=gpuPower(g,f+15,r2[1],r2[2]),a=p2>p?Math.min(1,(limitW-p)/(p2-p)):0;
+    tps=(1-a)/t+a/r2[0];pw=p+(p2-p)*a;f=Math.round(f+15*a);}
+  if(p>limitW){
+    if(limitW<=g.idle+1){mode='OFF';tps=0;pw=g.idle;}
+    else{var off=t*(p-limitW)/(limitW-g.idle);tps=1/(t+off);pw=limitW;mode='DUTY';}
+  }
+  return (opCache[ck]={clock:f,power:pw,tps:tps,mode:mode});
+}
+
+/* ===================================================================== 마을·가정 모델 */
+var HOUSES=[
+  {id:'A',name:'A동',gpu:'5090', sysW:80,solar:5.0,batt:8,x:-18,wall:0xe9e2d4,roof:0x5b4a43},
+  {id:'B',name:'B동',gpu:'3080', sysW:90,solar:4.0,batt:8,x:-6, wall:0xdfe6ea,roof:0x3f4d5c},
+  {id:'C',name:'C동',gpu:'4080',sysW:70,solar:3.0,batt:8,x:6,  wall:0xeadbcf,roof:0x6a3f35},
+  {id:'D',name:'D동',gpu:'4080',sysW:70,solar:3.0,batt:8,x:18, wall:0xe3e7dc,roof:0x46503d}
+];
+var HZ=-6;   /* 집들이 놓인 z (도로는 +z 쪽 = 남쪽) */
+var MAXG=8;   /* 자동 모드에서 노드 하나가 켤 수 있는 최대 GPU 장수 */
+var HEAT_EFF=0.8,TANK_L=120,TANK_MAX=65,TANK_RESUME=55,CHG_MAX=3.3,BATT_EFF=0.95,JOB_TOK=200000,KWH_PER_L=0.0465;
+function solarCurve(h){return (h<6||h>18)?0:Math.pow(Math.sin(Math.PI*(h-6)/12),1.5);}
+function bump(h,c,w,a){return a*Math.exp(-((h-c)*(h-c))/(2*w*w));}
+function loadKW(h){return 0.35+bump(h,7.5,1.0,0.9)+bump(h,20.0,1.6,1.3);}
+function blankDay(){return {solar:0,exp:0,excess:0,abs:0,lost:0,grid:0,heat:0,vent:0,tokens:0,jobs:0,requeued:0};}
+
+var S={};
+function resetAll(){
+  S.hour=9;S.day=1;S.simT=0;S.cloudUntil=-1;S.queue=[];S.seq=0;S.today=blankDay();S.chart=new Array(240);S.events=[];
+  S.tot={solar:0,exp:0,excess:0,abs:0,lost:0};
+  HOUSES.forEach(function(H){H.s={soc:0.35,tank:45,st:'OFF',hold:0,low:0,k:1,kHold:0,vent:false,job:null,lostUntil:-1,gpuTemp:27,op:null,
+    solar:0,load:0,charge:0,exp:0,excess:0,absorbed:0,lost:0,nodeKW:0,limitPer:0,tps:0};});
+  log('시뮬레이션 시작 · 배터리 35%, 온수 45℃');
+}
+S.playing=!reduce;S.speed=0.4;S.solarScale=1;S.gridCap=2.0;S.gpuMode='auto';S.nodesOn=true;S.demand=true;S.sel='B';
+
+function fmtTime(h){var hh=Math.floor(h)%24,mm=Math.floor((h-Math.floor(h))*60);return (hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;}
+function phaseOf(h){if(h<5.5)return '밤';if(h<7.5)return '해 뜰 무렵';if(h<10.5)return '오전';if(h<14.5)return '한낮';if(h<17.5)return '오후';if(h<19.5)return '해 질 무렵';return '밤';}
+function log(msg){S.events.unshift('['+fmtTime(S.hour||0)+'] '+msg);if(S.events.length>12)S.events.length=12;evDirty=true;}
+var evDirty=true;
+var fx={jobOut:function(){},jobBack:function(){},jobReturn:function(){}};
+
+function releaseJob(H,why,lose){
+  var n=H.s;if(!n.job)return;
+  if(lose)n.job.done=0;
+  S.queue.unshift(n.job);n.job=null;S.today.requeued++;fx.jobReturn(H);
+  log(H.name+' → 작업 #'+S.queue[0].id+' 반납·재배정 대기 ('+why+')');
+}
+function fail(H){
+  var n=H.s;
+  if(n.st==='LOST'){n.lostUntil=S.simT;return;}
+  n.st='LOST';n.lostUntil=S.simT+1.5;n.hold=n.low=0;
+  log(H.name+' 노드 장애 (1.5시간)');
+  releaseJob(H,'노드 이탈',true);
+}
+
+function step(dt){
+  var dq=Math.max(dt,1e-6);   /* 일시정지(dt=0)에도 순간값 계산이 0으로 나누지 않도록 */
+  S.simT+=dt;var prevH=S.hour;S.hour+=dt;
+  if(S.hour>=24){S.hour-=24;S.day++;S.today=blankDay();S.chart=new Array(240);log('Day '+S.day+' 시작');}
+  var h=S.hour,cloud=S.simT<S.cloudUntil?0.25:1;
+  if(S.demand)while(S.queue.length<6)S.queue.push({id:++S.seq,done:0});
+  var tot={solar:0,exp:0,excess:0,abs:0,lost:0},T=S.today;
+  HOUSES.forEach(function(H){
+    var n=H.s,g=GPUS[H.gpu];
+    n.solar=H.solar*solarCurve(h)*cloud*S.solarScale;n.load=loadKW(h);
+    var net=n.solar-n.load,rem=0;
+    if(net>0){var room=(1-n.soc)*H.batt,ch=Math.max(0,Math.min(net,CHG_MAX,room/(dq*BATT_EFF)));n.soc=Math.min(1,n.soc+ch*dt*BATT_EFF/H.batt);n.charge=ch;rem=net-ch;}
+    else{var dis=Math.min(-net,CHG_MAX,n.soc*H.batt*BATT_EFF/dq);n.soc=Math.max(0,n.soc-dis*dt/BATT_EFF/H.batt);n.charge=-dis;}
+    n.exp=Math.min(rem,S.gridCap);n.excess=rem-n.exp;           /* 배터리·판매 후에도 남는 전기 = 출력제한 대상 */
+
+    /* ---- 노드 제어 (오케스트레이터와 같은 규칙: 히스테리시스 + 온수 한계 + 장애) */
+    if(n.st==='LOST'&&S.simT>=n.lostUntil){n.st='OFF';log(H.name+' 노드 복구 · 재접속');}
+    var avail=n.excess*1000-H.sysW;                             /* GPU 들에 줄 수 있는 전력 = 잉여 − 나머지 PC */
+    if(S.gpuMode!=='auto')n.k=+S.gpuMode;
+    else{
+            /* 잉여를 남김없이: GPU 한 장이 실제로 쓸 수 있는 최대 전력으로 나눠 장수를 바로 맞춤 */
+      n.k=Math.max(1,Math.min(MAXG,Math.ceil(avail/gpuAt(H.gpu,g.tdp).power-1e-9)));
+    }
+    var per=avail/n.k;                                            /* GPU 1장당 전력 한도 */
+    n.limitPer=Math.max(0,Math.min(g.tdp,per));
+    var canRun=S.nodesOn&&per>g.idle+5;                         /* PC + GPU 한 장을 최소로 돌릴 전력만 있으면 가동 */
+    if(n.st==='RUN'){
+      if(!canRun){n.low+=dt;if(n.low>0.002){n.st='OFF';n.low=0;log(H.name+' 노드 정지 · 잉여 '+n.excess.toFixed(2)+' kW');releaseJob(H,'잉여 부족',false);}}
+      else n.low=0;
+    }else if(n.st==='OFF'){
+      if(canRun){n.hold+=dt;if(n.hold>=0){n.st='RUN';n.hold=0;log(H.name+' 노드 가동 · 잉여 '+n.excess.toFixed(2)+' kW');}}else n.hold=0;
+    }else if(n.st==='HEAT_FULL'&&n.tank<=TANK_RESUME){n.st='OFF';log(H.name+' 온수 사용으로 여유 → 대기');}
+
+    n.nodeKW=0;n.tps=0;n.op=null;
+    if(n.st==='RUN'){
+      if(!n.job&&S.queue.length){n.job=S.queue.shift();fx.jobOut(H);}
+      if(n.job){
+        var op=gpuAt(H.gpu,Math.max(n.limitPer,g.idle+2));n.op=op;n.tps=op.tps*n.k;
+        n.nodeKW=(H.sysW+op.power*n.k)/1000;
+        n.job.done+=n.tps*3600*dt;
+        while(n.job&&n.job.done>=JOB_TOK){                      /* 끝나면 같은 순간에 다음 작업으로 (남은 토큰 이월) */
+          var carry=n.job.done-JOB_TOK;T.jobs++;n.job=null;fx.jobBack(H);
+          if(S.queue.length){n.job=S.queue.shift();n.job.done+=carry;fx.jobOut(H);}
+        }
+      }else n.nodeKW=(H.sysW+g.idle*n.k)/1000;
+    }
+    n.absorbed=Math.min(n.nodeKW,n.excess);var over=Math.max(0,n.nodeKW-n.excess);n.lost=n.excess-n.absorbed;
+
+    /* ---- 온수 탱크: 폐열 유입 − 손실, 7시·21시 40 L 사용 */
+    /* 탱크가 가득(65℃)이면 연산은 계속하고 열은 외부로 방열 */
+    var heat=n.nodeKW*HEAT_EFF;n.vent=heat>0&&n.tank>=TANK_MAX-0.05;var heatIn=n.vent?0:heat;
+    n.tank=Math.min(TANK_MAX,n.tank+heatIn*3600*dt/(TANK_L*4.186)-(n.tank-20)*0.012*dt);
+    [7,21].forEach(function(u){if(prevH<u&&h>=u){var f=40/TANK_L;n.tank=n.tank*(1-f)+15*f;}});
+    /* GPU 온도: RC 열모델(vgpu.py 와 같은 식). 정상상태 = 25℃ + 전력 × 열저항, 시정수 = 열저항 × 열용량(약 2분) */
+    var gp=n.op?n.op.power:(n.st==='RUN'?g.idle:g.idle*0.6),rth=(g.ssC-25)/g.tdp,tss=25+gp*rth;
+    n.gpuTemp=tss+(n.gpuTemp-tss)*Math.exp(-dt*3600/(rth*g.heatCap));
+
+    T.solar+=n.solar*dt;T.exp+=n.exp*dt;T.excess+=n.excess*dt;T.abs+=n.absorbed*dt;T.lost+=n.lost*dt;T.grid+=over*dt;
+    T.heat+=heatIn*dt;T.vent+=(heat-heatIn)*dt;T.tokens+=n.tps*3600*dt;
+    tot.solar+=n.solar;tot.exp+=n.exp;tot.excess+=n.excess;tot.abs+=n.absorbed;tot.lost+=n.lost;
+  });
+  S.tot=tot;
+  S.chart[Math.min(239,Math.floor(h*10))]={s:tot.solar,e:tot.exp,x:tot.excess,a:tot.abs};
+}
+
+/* ===================================================================== 조작 */
+var playBtn=$('play'),hourIn=$('hour');
+function setPlay(p){S.playing=p;playBtn.textContent=p?'일시정지':'재생';}
+playBtn.addEventListener('click',function(){setPlay(!S.playing);});
+hourIn.addEventListener('input',function(){S.hour=+hourIn.value;setPlay(false);});
+function chipGroup(attr,fn){var bs=document.querySelectorAll('['+attr+']');Array.prototype.forEach.call(bs,function(b){b.addEventListener('click',function(){
+  Array.prototype.forEach.call(bs,function(o){o.setAttribute('aria-pressed',String(o===b));});fn(b.getAttribute(attr));});});}
+chipGroup('data-speed',function(v){S.speed=+v;});
+chipGroup('data-gpun',function(v){S.gpuMode=v;log(v==='auto'?'노드 GPU: 잉여만큼 자동 (최대 '+MAXG+'장)':'노드 GPU: '+v+'장 고정');buildCards();gpuDirty=true;});
+chipGroup('data-view',function(v){if(three)three.goTo(v);});
+$('solar').addEventListener('input',function(e){S.solarScale=e.target.value/100;$('solarV').textContent=e.target.value+'%';});
+$('cap').addEventListener('input',function(e){S.gridCap=+e.target.value;$('capV').textContent=S.gridCap.toFixed(1)+' kW';});
+$('cloud').addEventListener('click',function(){S.cloudUntil=S.simT+1.2;log('구름: 발전량 25%로 급감 (1.2시간)');});
+function sw(id,key,on,off){var b=$(id);b.addEventListener('click',function(){S[key]=!S[key];b.setAttribute('aria-checked',String(S[key]));log(S[key]?on:off);});}
+sw('nodesOn','nodesOn','와트투비트 노드 켬','와트투비트 노드 끔 (비교용)');
+sw('demand','demand','AI 작업 요청 재개','AI 작업 요청 중단');
+$('reset').addEventListener('click',function(){resetAll();hourIn.value=S.hour;});
+
+/* ---- 가구 카드 */
+var cardEls={};
+function buildCards(){
+  var box=$('houses');box.innerHTML='';cardEls={};
+  HOUSES.forEach(function(H){
+    var a=document.createElement('article');a.className='hcard';a.setAttribute('data-id',H.id);
+    a.innerHTML='<header><b>'+H.name+'</b><span class="gpu">'+GPUS[H.gpu].name+(S.gpuMode==='auto'?' ×최대 '+MAXG:' ×'+S.gpuMode)+' · 태양광 '+H.solar+' kW</span><span class="st" data-k="st">정지</span></header>'+
+      '<dl class="kv">'+
+      '<dt>발전 / 집 사용</dt><dd data-k="sl"></dd><dt>배터리</dt><dd data-k="bt"></dd><dt>전력망 판매</dt><dd data-k="ex"></dd>'+
+      '<dt>출력제한 잉여</dt><dd data-k="xs"></dd><dt>가동 GPU</dt><dd data-k="gk"></dd><dt>노드 전력 / 한도</dt><dd data-k="nd"></dd><dt>GPU 클럭 · 온도</dt><dd data-k="gc"></dd>'+
+      '<dt>생성 속도</dt><dd data-k="tp"></dd><dt>온수 탱크</dt><dd data-k="tk"></dd></dl>'+
+      '<button class="btn warn" type="button" data-k="fail">장애 주입</button>';
+    a.addEventListener('click',function(e){if(e.target.getAttribute('data-k')==='fail'){fail(H);e.stopPropagation();return;}select(H.id);});
+    box.appendChild(a);
+    var m={el:a};Array.prototype.forEach.call(a.querySelectorAll('[data-k]'),function(x){m[x.getAttribute('data-k')]=x;});cardEls[H.id]=m;
+  });
+  select(S.sel,true);
+}
+function select(id,quiet){
+  S.sel=id;gpuDirty=true;
+  HOUSES.forEach(function(H){if(cardEls[H.id])cardEls[H.id].el.classList.toggle('sel',H.id===id);});
+  if(three&&!quiet){three.highlight(id);var hv=document.querySelector('[data-view="house"]');if(hv&&hv.getAttribute('aria-pressed')==='true')three.goTo('house');}
+}
+var STN={OFF:'대기',RUN:'가동',LOST:'장애',HEAT_FULL:'온수 가득'};
+var RSN={NONE:'최고 클럭',PWR_CAP:'전력 한도로 클럭↓',DUTY:'듀티 사이클',OFF:'정지'};
+function stateLabel(n){if(n.st==='RUN'&&n.vent)return ['HEAT_FULL','가동 · 온수 가득→방열'];if(n.st==='RUN'&&n.op&&n.op.mode!=='NONE')return ['CAP','감속 · '+RSN[n.op.mode]];if(n.st==='RUN'&&!n.job)return ['RUN','가동 · 작업 대기'];return [n.st,STN[n.st]];}
+function updCards(){
+  HOUSES.forEach(function(H){
+    var n=H.s,m=cardEls[H.id],g=GPUS[H.gpu];if(!m)return;
+    var sl=stateLabel(n);m.st.className='st '+sl[0];m.st.textContent=sl[1];
+    m.sl.textContent=n.solar.toFixed(2)+' / '+n.load.toFixed(2)+' kW';
+    m.bt.textContent=Math.round(n.soc*100)+'% '+(n.charge>0.02?'충전':n.charge<-0.02?'방전':'');
+    m.ex.textContent=n.exp.toFixed(2)+' kW';
+    m.xs.textContent=n.excess.toFixed(2)+' kW'+(n.lost>0.05?' · '+n.lost.toFixed(2)+' 버림':'');m.xs.className=n.lost>0.05?'cut':'';
+    m.gk.textContent=n.st==='RUN'?n.k+'장':'—';
+    m.nd.textContent=(n.nodeKW*1000).toFixed(0)+' W / '+(n.st==='RUN'?(n.limitPer*n.k+H.sysW).toFixed(0)+' W':'—');
+    m.gc.textContent=n.op?(n.op.clock+' MHz · '+n.gpuTemp.toFixed(0)+'℃'):'— · '+n.gpuTemp.toFixed(0)+'℃';
+    m.tp.textContent=n.tps>0?n.tps.toFixed(0)+' tok/s':'—';
+    m.tk.textContent=n.tank.toFixed(1)+'℃';
+    m.fail.textContent=n.st==='LOST'?'즉시 복구':'장애 주입';
+  });
+}
+function kwh(v){return v.toFixed(1)+' kWh';}
+function tok(v){return v>=1e6?(v/1e6).toFixed(1)+'M 토큰':Math.round(v/1e3)+'k 토큰';}
+function updTable(){
+  var T=S.today;$('dayTag').textContent='Day '+S.day+' · 0시부터';
+  $('t-solar0').textContent=$('t-solar1').textContent=kwh(T.solar);
+  $('t-exp0').textContent=$('t-exp1').textContent=kwh(T.exp);
+  $('t-ex0').textContent=$('t-ex1').textContent=kwh(T.excess);
+  $('t-lost0').textContent=kwh(T.excess);$('t-lost1').textContent=kwh(T.lost);
+  $('t-abs0').textContent='0.0 kWh';$('t-abs1').textContent=kwh(T.abs)+(T.excess>0.05?' ('+Math.round(T.abs/T.excess*100)+'%)':'');
+  $('t-tok0').textContent='0';$('t-tok1').textContent=tok(T.tokens)+' · '+T.jobs+'건';
+  $('t-w0').textContent='0 L';$('t-w1').textContent=Math.round(T.heat/KWH_PER_L)+' L'+(T.vent>0.05?' · 방열 '+T.vent.toFixed(1)+' kWh':'');
+  $('t-g0').textContent='—';$('t-g1').textContent=T.grid.toFixed(3)+' kWh';
+}
+var statusEl=$('status'),statusText=$('statusText');
+function updHud(){
+  var tm=fmtTime(S.hour),t=S.tot;
+  $('clock').textContent=tm;$('phase').textContent=phaseOf(S.hour)+' · Day '+S.day+(S.simT<S.cloudUntil?' · 구름':'');$('hourV').textContent=tm;
+  var cls,txt;
+  if(t.lost>0.05){cls='cut';txt='출력제한 · '+t.lost.toFixed(1)+' kW 버려지는 중'+(t.abs>0.05?' · 노드가 '+t.abs.toFixed(1)+' kW 흡수':'');}
+  else if(t.abs>0.05){cls='node';txt='노드가 버려질 전기 '+t.abs.toFixed(2)+' kW를 AI 연산으로 바꾸는 중';}
+  else if(t.solar>0.05){cls='ok';txt='발전 중 · 집·배터리·전력망이 모두 받는 중';}
+  else{cls='';txt='발전 없음 · 노드 대기 · 대기 작업 '+S.queue.length+'건';}
+  statusEl.className='hud tr'+(cls?' '+cls:'');statusText.textContent=txt;
+  if(evDirty){$('ev').innerHTML=S.events.map(function(e){return '<div>'+e+'</div>';}).join('');evDirty=false;}
+}
+
+/* ---- 2D 차트 */
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+function prep(cv){var r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;if(!r.width)return null;cv.width=Math.round(r.width*d);cv.height=Math.round(r.height*d);var g=cv.getContext('2d');g.setTransform(d,0,0,d,0,0);return {g:g,w:r.width,h:r.height};}
+function drawDay(){
+  var c=prep($('dayChart'));if(!c)return;var g=c.g,W=c.w,H=c.h,L=34,R=8,Tp=8,B=20;
+  var maxKW=Math.max(4,HOUSES.reduce(function(a,h){return a+h.solar;},0)*Math.max(1,S.solarScale));
+  var X=function(i){return L+(W-L-R)*i/240;},Y=function(v){return H-B-(H-B-Tp)*Math.min(1,v/maxKW);};
+  g.font='11px '+css('--font-num');g.fillStyle=css('--muted');g.strokeStyle=css('--line');g.lineWidth=1;
+  for(var hh=0;hh<=24;hh+=6){var x=L+(W-L-R)*hh/24;g.beginPath();g.moveTo(x,Tp);g.lineTo(x,H-B);g.stroke();g.fillText(String(hh).padStart(2,'0'),x-7,H-5);}
+  for(var k=0;k<=maxKW;k+=5){var y=Y(k);g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillText(String(k),6,y+4);}
+  function area(key,col,alpha){g.fillStyle=col;g.globalAlpha=alpha;var open=false;
+    for(var i=0;i<240;i++){var p=S.chart[i];if(!p){if(open){g.lineTo(X(i-1),Y(0));g.closePath();g.fill();open=false;}continue;}
+      if(!open){g.beginPath();g.moveTo(X(i),Y(0));open=true;}g.lineTo(X(i),Y(p[key]));}
+    if(open){g.lineTo(X(239),Y(0));g.closePath();g.fill();}g.globalAlpha=1;}
+  function line(key,col,wd){g.strokeStyle=col;g.lineWidth=wd;g.beginPath();var on=false;
+    for(var i=0;i<240;i++){var p=S.chart[i];if(!p){on=false;continue;}if(!on){g.moveTo(X(i),Y(p[key]));on=true;}else g.lineTo(X(i),Y(p[key]));}g.stroke();}
+  area('s',css('--energy'),.16);line('s',css('--energy'),2);
+  area('x',css('--cut'),.28);area('a',css('--compute'),.55);
+  line('e',css('--ok'),2);
+  var nx=L+(W-L-R)*S.hour/24;g.strokeStyle=css('--ink');g.setLineDash([4,4]);g.lineWidth=1;g.beginPath();g.moveTo(nx,Tp);g.lineTo(nx,H-B);g.stroke();g.setLineDash([]);
+  g.strokeStyle=css('--ok');g.globalAlpha=.5;g.setLineDash([2,3]);var cy=Y(S.gridCap*HOUSES.length);g.beginPath();g.moveTo(L,cy);g.lineTo(W-R,cy);g.stroke();g.setLineDash([]);g.globalAlpha=1;
+  g.fillStyle=css('--muted');g.fillText('전력망 수용 한도',L+4,cy-4);
+}
+var gpuDirty=true,gpuCurve=null;
+function drawGpu(){
+  var H=HOUSES.filter(function(h){return h.id===S.sel;})[0],key=H.gpu,G=GPUS[key];
+  if(gpuDirty||!gpuCurve||gpuCurve.key!==key){
+    var pts=[],mxT=0,mxE=0;
+    for(var i=0;i<=60;i++){var fr=0.15+0.85*i/60,o=gpuAt(key,fr*G.tdp),e=o.tps/o.power;pts.push({w:fr*G.tdp,t:o.tps,e:e});mxT=Math.max(mxT,o.tps);mxE=Math.max(mxE,e);}
+    gpuCurve={key:key,pts:pts,mxT:mxT,mxE:mxE};
+    var full=gpuAt(key,G.tdp),six=gpuAt(key,0.6*G.tdp);
+    $('gpuTag').textContent=H.name+' · '+G.name;
+    $('gpuNote').innerHTML='전력 한도를 '+G.tdp+' W → '+Math.round(0.6*G.tdp)+' W로 40% 낮추면 속도는 <b>'+Math.max(0,(1-six.tps/full.tps)*100).toFixed(0)+'%</b>만 줄고 1W당 처리량은 <b>'+(six.tps/six.power/(full.tps/full.power)).toFixed(2)+'배</b>. 언어모델 생성은 메모리 대역폭에 묶여 있어 클럭을 낮춰도 손해가 작습니다 (모델 추정값).';
+    gpuDirty=false;
+  }
+  var c=prep($('gpuChart'));if(!c)return;var g=c.g,W=c.w,Hh=c.h,L=34,R=10,Tp=10,B=22,P=gpuCurve.pts;
+  var w0=P[0].w,w1=P[P.length-1].w,X=function(w){return L+(W-L-R)*(w-w0)/(w1-w0);},Y=function(v){return Hh-B-(Hh-B-Tp)*v;};
+  g.font='11px '+css('--font-num');g.fillStyle=css('--muted');g.strokeStyle=css('--line');g.lineWidth=1;
+  [0,.5,1].forEach(function(v){var y=Y(v);g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillText(Math.round(v*100)+'%',4,y+4);});
+  [w0,(w0+w1)/2,w1].forEach(function(w){var x=X(w);g.fillText(Math.round(w)+'W',Math.min(W-R-34,Math.max(L,x-14)),Hh-6);});
+  function ln(f,col){g.strokeStyle=col;g.lineWidth=2.2;g.beginPath();P.forEach(function(p,i){var x=X(p.w),y=Y(f(p));i?g.lineTo(x,y):g.moveTo(x,y);});g.stroke();}
+  ln(function(p){return p.t/gpuCurve.mxT;},css('--compute'));ln(function(p){return p.e/gpuCurve.mxE;},css('--ok'));
+  var n=H.s;if(n.st==='RUN'&&n.op){var w=Math.max(w0,Math.min(w1,n.limitPer)),o=gpuAt(key,w);
+    g.fillStyle=css('--heat');g.beginPath();g.arc(X(w),Y(o.tps/gpuCurve.mxT),5,0,7);g.fill();
+    g.fillStyle=css('--ink');g.fillText(Math.round(o.power)+'W · '+o.tps.toFixed(0)+' tok/s',Math.min(W-R-120,X(w)+8),Y(o.tps/gpuCurve.mxT)+16);}
+}
+
+/* ===================================================================== 3D */
+var three=null;
+try{three=init3D();}catch(err){console.error(err);$('loading').textContent='이 브라우저에서는 3D 장면을 표시할 수 없습니다. 아래 수치와 조작은 그대로 동작합니다.';}
+
+function init3D(){
+  if(typeof THREE==='undefined'||!THREE.OrbitControls)throw new Error('three.js를 불러오지 못했습니다');
+  var V=function(x,y,z){return new THREE.Vector3(x,y,z);};
+  var stage=$('stage'),canvas=$('gl');
+  var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  renderer.outputEncoding=THREE.sRGBEncoding;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+  var scene=new THREE.Scene();scene.background=new THREE.Color(0x9ec8ee);scene.fog=new THREE.Fog(0x9ec8ee,130,330);
+  var camera=new THREE.PerspectiveCamera(42,1,0.1,600);camera.position.set(-6,24,40);
+  var controls=new THREE.OrbitControls(camera,canvas);controls.target.set(0,2,-5);controls.enableDamping=true;
+  controls.maxPolarAngle=Math.PI*0.47;controls.minDistance=5;controls.maxDistance=150;
+
+  var hemi=new THREE.HemisphereLight(0xd6e8ff,0x4d5e3c,0.65);scene.add(hemi);
+  var sun=new THREE.DirectionalLight(0xfff0d8,1.7);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+  var sc=sun.shadow.camera;sc.left=-42;sc.right=42;sc.top=30;sc.bottom=-30;sc.near=1;sc.far=200;sun.shadow.bias=-0.0006;
+  scene.add(sun);scene.add(sun.target);sun.target.position.set(0,0,-4);
+
+  function mat(c,o){var p={color:c,roughness:.85,metalness:0};if(o)for(var k in o)p[k]=o[k];return new THREE.MeshStandardMaterial(p);}
+  function mk(geo,m,x,y,z,parent,noShadow){var me=new THREE.Mesh(geo,m);me.position.set(x||0,y||0,z||0);me.castShadow=!noShadow;me.receiveShadow=true;(parent||scene).add(me);return me;}
+  function box(w,h,d){return new THREE.BoxGeometry(w,h,d);}
+
+  /* ---- 땅·도로 */
+  var ground=mk(new THREE.PlaneGeometry(320,320),mat(0x5f7c44),0,0,0,null,true);ground.rotation.x=-Math.PI/2;
+  var road=mk(new THREE.PlaneGeometry(80,6),mat(0x393b3f,{roughness:.95}),0,0.02,2,null,true);road.rotation.x=-Math.PI/2;
+  var walk=mk(new THREE.PlaneGeometry(80,2),mat(0xa8a59e),0,0.025,-2,null,true);walk.rotation.x=-Math.PI/2;
+  var dashM=new THREE.MeshBasicMaterial({color:0xe9e3c8});
+  for(var dx=-38;dx<=38;dx+=4){var d=mk(new THREE.PlaneGeometry(1.8,0.14),dashM,dx,0.03,2,null,true);d.rotation.x=-Math.PI/2;}
+
+  /* ---- 발광 스프라이트 */
+  var glowTex=(function(){var c=document.createElement('canvas');c.width=c.height=64;var g=c.getContext('2d'),gr=g.createRadialGradient(32,32,0,32,32,32);
+    gr.addColorStop(0,'rgba(255,255,255,1)');gr.addColorStop(.35,'rgba(255,255,255,.55)');gr.addColorStop(1,'rgba(255,255,255,0)');g.fillStyle=gr;g.fillRect(0,0,64,64);return new THREE.CanvasTexture(c);})();
+  function spr(color,size){var s=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:color,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,fog:false}));s.scale.set(size,size,1);s.visible=false;scene.add(s);return s;}
+  function Flow(pts,color,n,size,speed,fade){
+    this.c=new THREE.CatmullRomCurve3(pts);this.sp=[];this.rate=0;this.speed=speed;this.fade=!!fade;
+    for(var i=0;i<n;i++)this.sp.push({s:spr(color,size),t:i/n});
+  }
+  Flow.prototype.update=function(dt){
+    var k=this.rate<0.01?0:Math.max(1,Math.ceil(this.sp.length*Math.min(1,this.rate)));
+    for(var i=0;i<this.sp.length;i++){var o=this.sp[i];if(i>=k){o.s.visible=false;continue;}
+      o.t=(o.t+dt*this.speed)%1;o.s.visible=true;this.c.getPointAt(o.t,o.s.position);
+      if(this.fade)o.s.material.opacity=1-o.t;}
+  };
+  var flows=[];
+
+  /* ---- 전봇대·전선·변전소 */
+  var poleM=mat(0x8d8a84),wireM=mat(0x1c1f22,{roughness:.6});
+  var poleX=[-24,-12,0,12,24,32],poleZ=-1.6,poleTop=7.0,polePts=[];
+  poleX.forEach(function(x){mk(new THREE.CylinderGeometry(0.11,0.15,7.4,8),poleM,x,3.7,poleZ);mk(box(1.6,0.12,0.12),poleM,x,poleTop,poleZ);polePts.push(V(x,poleTop+0.06,poleZ));});
+  function sag(a,b,s){var p=[];for(var i=0;i<=16;i++){var t=i/16,q=a.clone().lerp(b,t);q.y-=s*4*t*(1-t);p.push(q);}return p;}
+  var lineAll=[];
+  for(var i=0;i<polePts.length-1;i++){var sp=sag(polePts[i],polePts[i+1],0.5);mk(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sp),24,0.025,5,false),wireM,0,0,0,null,true);lineAll=lineAll.concat(i?sp.slice(1):sp);}
+  mk(new THREE.CylinderGeometry(0.45,0.45,1.1,12),mat(0x7d858c,{metalness:.4,roughness:.5}),32.5,5.9,poleZ);
+  var subG=new THREE.Group();subG.position.set(40,0,-5);scene.add(subG);
+  mk(box(6,0.2,6),mat(0x9a978f),0,0.1,0,subG);
+  [[-1.5,-1.2],[1.5,-1.2],[0,1.4]].forEach(function(p){mk(box(1.4,2.2,1.4),mat(0x6f7880,{metalness:.35,roughness:.5}),p[0],1.3,p[1],subG);});
+  var fenceM=mat(0x8a8f94,{metalness:.5,roughness:.5});
+  [[-3,0,0.06,6],[3,0,0.06,6],[0,-3,6,0.06],[0,3,6,0.06]].forEach(function(f){mk(box(f[2],1.6,f[3]),fenceM,f[0],0.8,f[1],subG);});
+  var gridFlow=new Flow(lineAll.slice(0).concat([V(36,4,-4),V(40,2.5,-5)]),0x5cc28d,26,0.55,0.12);flows.push(gridFlow);
+
+  /* ---- AI 데이터센터 */
+  var DC=V(-4,0,-88),dcG=new THREE.Group();dcG.position.copy(DC);scene.add(dcG);
+  mk(box(38,13,16),mat(0x2b3542,{roughness:.6,metalness:.2}),0,6.5,0,dcG);
+  var dcWin=new THREE.MeshBasicMaterial({color:0x8f7dff});
+  for(var r=0;r<3;r++)for(var cI=0;cI<9;cI++)mk(box(3,0.5,0.05),dcWin,-16+cI*4,3+r*3.2,8.03,dcG,true);
+  mk(new THREE.CylinderGeometry(0.15,0.15,6,6),mat(0x9aa4ad),12,16,0,dcG);
+  var dcTop=V(DC.x+6,13.5,DC.z+8);
+
+  /* ---- 집 */
+  var panelM=mat(0x1d2f57,{roughness:.35,metalness:.3,emissive:0x0b1530,emissiveIntensity:.4}),frameM=mat(0xc9ced3,{metalness:.6,roughness:.4});
+  var winM=new THREE.MeshStandardMaterial({color:0x6b8fb3,roughness:.2,metalness:.1,emissive:0xffcc7a,emissiveIntensity:0});
+  var doorM=mat(0x6a4a34),cabM=mat(0x232a33,{roughness:.5,metalness:.4}),battM=mat(0xdfe3e6,{roughness:.5}),invM=mat(0xf0f2f4,{roughness:.5});
+  var trunkM=mat(0x6b4a2f),leafM=[mat(0x3f6b2e),mat(0x4f7d36),mat(0x5a8a3c)];
+  function tree(x,z,s){mk(new THREE.CylinderGeometry(0.12*s,0.2*s,2.2*s,7),trunkM,x,1.1*s,z);for(var i=0;i<4;i++){var b=mk(new THREE.IcosahedronGeometry((0.9+Math.random()*0.4)*s,1),leafM[i%3],x+(Math.random()-.5)*1.4*s,(2.6+Math.random()*0.9)*s,z+(Math.random()-.5)*1.4*s);b.rotation.set(Math.random()*3,Math.random()*3,0);}}
+  var houseGroups=[],H3={};
+  var ang=Math.atan2(1.6,2.8),slopeL=Math.sqrt(2.8*2.8+1.6*1.6);
+  HOUSES.forEach(function(H){
+    var g=new THREE.Group();g.position.set(H.x,0,HZ);g.userData.id=H.id;scene.add(g);houseGroups.push(g);
+    var W=function(x,y,z){return V(H.x+x,y,HZ+z);};
+    mk(box(6,3.2,5),mat(H.wall),0,1.6,0,g);
+    mk(box(6.4,0.25,5.4),mat(0x8b8780),0,0.12,0,g);
+    var rm=mat(H.roof);
+    var front=new THREE.Group();front.position.set(0,3.2+0.8,1.4);front.rotation.x=ang;g.add(front);mk(box(6.7,0.14,slopeL+0.1),rm,0,0,0,front);
+    var back=new THREE.Group();back.position.set(0,3.2+0.8,-1.4);back.rotation.x=-ang;g.add(back);mk(box(6.7,0.14,slopeL+0.1),rm,0,0,0,back);
+    var tri=new THREE.Shape();tri.moveTo(-2.5,0);tri.lineTo(2.5,0);tri.lineTo(0,1.6);tri.lineTo(-2.5,0);
+    [-3,3].forEach(function(sx){var m=mk(new THREE.ShapeGeometry(tri),mat(H.wall,{side:THREE.DoubleSide}),sx,3.2,0,g);m.rotation.y=Math.PI/2;});
+    /* 태양광 패널 (0.4 kW/장) */
+    var np=Math.round(H.solar/0.4),cols=Math.ceil(np/2);
+    for(var p=0;p<np;p++){var cx=(p%cols-(cols-1)/2)*0.98,cz=(Math.floor(p/cols)-0.5)*1.5;
+      mk(box(0.92,0.05,1.42),frameM,cx,0.1,cz,front);mk(box(0.86,0.06,1.36),panelM,cx,0.12,cz,front,true);}
+    mk(box(0.95,1.9,0.08),doorM,-0.8,0.95,2.53,g);
+    [[-2.1,1.9],[0.7,1.9]].forEach(function(q){mk(box(1.1,0.9,0.06),winM,q[0],q[1],2.53,g,true);});
+    [[-1.5,1.9],[1.5,1.9]].forEach(function(q){var w=mk(box(1.1,0.9,0.06),winM,q[0],q[1],-2.53,g,true);});
+    /* 인버터 + 표시등 */
+    mk(box(0.55,0.7,0.16),invM,2.25,1.55,2.6,g);
+    var led=spr(0x8a97a3,0.55);led.position.copy(W(2.25,1.75,2.72));
+    /* 배터리 (왼쪽 벽) + 충전량 막대 */
+    mk(box(0.42,1.3,0.9),battM,-3.25,0.9,0.6,g);
+    var socM=new THREE.MeshBasicMaterial({color:0x5cc28d});var soc=mk(box(0.02,1,0.18),socM,-3.47,0.3,0.6,g,true);
+    /* 노드 캐비닛 + 온수 탱크 (오른쪽 마당) */
+    mk(box(1.2,0.12,2.9),mat(0x9a978f),4.4,0.06,-0.1,g);
+    mk(box(0.9,1.5,0.85),cabM,4.4,0.87,0.7,g);
+    var leds=[];   /* GPU 한 장 = LED 한 칸 */
+    for(var li=0;li<MAXG;li++){var lm=new THREE.MeshBasicMaterial({color:0x39424c});leds.push(lm);mk(box(0.6,0.05,0.02),lm,4.4,0.3+li*0.15,1.135,g,true);}
+    var nodeGlow=spr(0x8f7dff,1.8);nodeGlow.position.copy(W(4.4,1.9,0.7));
+    var tankM=mat(0x3f7fd8,{roughness:.4,metalness:.3});mk(new THREE.CylinderGeometry(0.45,0.45,1.6,16),tankM,4.4,0.92,-0.9,g);
+    mk(new THREE.SphereGeometry(0.45,16,8,0,Math.PI*2,0,Math.PI/2),tankM,4.4,1.72,-0.9,g);
+    var pipe=[W(4.4,1.2,0.25),W(4.4,1.45,-0.15),W(4.4,1.3,-0.5)];
+    mk(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pipe),12,0.05,6,false),mat(0xb87333,{metalness:.6,roughness:.4}),0,0,0,null,true);
+    /* 인입선: 처마 → 전봇대 */
+    var pX=H.x+6,eave=W(2.7,3.35,2.75),pt=V(pX,poleTop+0.06,poleZ);
+    mk(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sag(eave,pt,0.35)),16,0.02,5,false),wireM,0,0,0,null,true);
+    tree(H.x-4.6,HZ-3.5,0.9);tree(H.x+5.6,HZ-3.6,0.75);
+    /* 흐름 */
+    var inv=W(2.25,1.55,2.75),roofC=W(0,4.15,1.6);
+    var F={
+      solar:new Flow([roofC,W(1.5,3.6,2.4),W(2.25,2.3,2.8),inv],0xe8a53a,8,0.5,0.6),
+      batt:new Flow([inv,W(1.5,0.6,2.9),W(-2.6,0.6,2.9),W(-3.4,0.9,1.2)],0xe8a53a,6,0.38,0.5),
+      exp:new Flow([inv,W(2.7,2.6,2.9),eave].concat(sag(eave,pt,0.35).slice(1)),0x5cc28d,8,0.45,0.5),
+      node:new Flow([inv,W(3.2,0.5,2.7),W(4.4,0.4,1.6),W(4.4,0.9,1.15)],0xe8a53a,7,0.45,0.6),
+      heat:new Flow(pipe,0xff7a45,5,0.42,0.8),
+      waste:new Flow([W(0,4.2,1.6),W(0.3,6.2,1.9),W(-0.2,8.4,2.2)],0xef5b55,10,0.65,0.45,true),
+      vent:new Flow([W(4.4,1.7,0.7),W(4.7,3.2,0.9),W(4.3,4.9,1.1)],0xff7a45,10,0.6,0.5,true)
+    };
+    for(var k in F)flows.push(F[k]);
+    var nodeTop=W(4.4,1.8,0.7);
+    var dcCurve=new THREE.CatmullRomCurve3([dcTop,V((dcTop.x+nodeTop.x)/2,30,(dcTop.z+nodeTop.z)/2),V(nodeTop.x,9,nodeTop.z+1),nodeTop]);
+    H3[H.id]={g:g,F:F,led:led,socM:socM,soc:soc,leds:leds,nodeGlow:nodeGlow,tankM:tankM,dc:dcCurve,center:W(1.5,2,0)};
+  });
+  /* 길 건너 나무 */
+  for(var t=-34;t<=34;t+=7)tree(t+Math.random()*2,9+Math.random()*3,0.8+Math.random()*0.3);
+
+  /* ---- 작업 입자 (데이터센터 ↔ 노드) */
+  var jobs=[];
+  function launch(id,dir,color){var s=spr(color,0.9);s.visible=true;jobs.push({s:s,c:H3[id].dc,t:0,dir:dir});}
+  fx.jobOut=function(H){launch(H.id,1,0x8f7dff);};
+  fx.jobBack=function(H){launch(H.id,-1,0xc6bdff);};
+  fx.jobReturn=function(H){launch(H.id,-1,0xef5b55);};
+
+  /* ---- 하늘·별·구름 */
+  var starsG=new THREE.BufferGeometry(),sp=[];
+  for(var si=0;si<500;si++){var th=Math.random()*Math.PI*2,ph=Math.random()*Math.PI*0.45,R=260;sp.push(R*Math.cos(th)*Math.sin(ph+0.1),R*Math.cos(ph),R*Math.sin(th)*Math.sin(ph+0.1));}
+  starsG.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
+  var starM=new THREE.PointsMaterial({color:0xffffff,size:1.6,sizeAttenuation:false,transparent:true,opacity:0,fog:false});scene.add(new THREE.Points(starsG,starM));
+  var sunSpr=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:0xfff2c4,transparent:true,depthWrite:false,fog:false}));sunSpr.scale.set(26,26,1);scene.add(sunSpr);
+  var clouds=new THREE.Group();scene.add(clouds);var cloudM=new THREE.MeshStandardMaterial({color:0xf4f6f8,roughness:1,transparent:true,opacity:0});
+  for(var ci=0;ci<7;ci++){var cg=new THREE.Group();cg.position.set(-60+ci*18,17+Math.random()*4,-14+Math.random()*16);for(var cb=0;cb<5;cb++){var b=new THREE.Mesh(new THREE.IcosahedronGeometry(2+Math.random()*2,1),cloudM);b.position.set(cb*2.4-5,Math.random(),Math.random()*2);cg.add(b);}clouds.add(cg);}
+  var cloudK=0;
+  var cDay=new THREE.Color(0x9ec8ee),cDusk=new THREE.Color(0xeaa26c),cNight=new THREE.Color(0x0b1220),cCloud=new THREE.Color(0x8d9aa6),tmpC=new THREE.Color();
+  function ss(a,b,x){var t=Math.min(1,Math.max(0,(x-a)/(b-a)));return t*t*(3-2*t);}
+  function sky(h,dt){
+    var t=(h-6)/12*Math.PI,dir=V(-Math.cos(t)*0.85,Math.sin(t),0.55).normalize();
+    var up=ss(-0.05,0.25,dir.y),night=1-ss(-0.12,0.05,dir.y);
+    var want=(S.simT<S.cloudUntil)?1:0;cloudK+=(want-cloudK)*Math.min(1,dt*1.5);
+    if(dir.y>0)tmpC.copy(cDusk).lerp(cDay,up);else tmpC.copy(cDusk).lerp(cNight,ss(0,0.15,-dir.y));
+    tmpC.lerp(cCloud,cloudK*0.55*(1-night));
+    scene.background.copy(tmpC);scene.fog.color.copy(tmpC);
+    sun.position.copy(dir).multiplyScalar(90).add(sun.target.position);
+    sun.intensity=1.8*up*(1-0.65*cloudK);sun.color.setHSL(0.1,0.6,0.62+0.3*up);
+    hemi.intensity=0.18+0.55*(1-night)*(1-0.3*cloudK);
+    sunSpr.position.copy(dir).multiplyScalar(220);sunSpr.material.opacity=Math.max(0,Math.min(1,dir.y*4+0.2))*(1-0.8*cloudK);
+    starM.opacity=night*0.9;winM.emissiveIntensity=night*1.1;
+    cloudM.opacity=cloudK*0.9;clouds.children.forEach(function(c){c.position.x+=dt*3;if(c.position.x>70)c.position.x=-70;});
+    return night;
+  }
+
+  /* ---- 라벨 */
+  var labels=$('labels'),lbls=[];
+  function addLbl(pos,html,id){var d=document.createElement('div');d.className='lbl';d.innerHTML=html;labels.appendChild(d);var o={el:d,pos:pos,id:id};lbls.push(o);return o;}
+  HOUSES.forEach(function(H){H3[H.id].lbl=addLbl(V(H.x,7.6,HZ),'',H.id);});
+  addLbl(V(DC.x,15.5,DC.z),'<i style="--c:#8f7dff"></i>AI 데이터센터 · 작업 요청');
+  addLbl(V(40,4.2,-5),'<i style="--c:#5cc28d"></i>변전소 · 전력망');
+  var vproj=new THREE.Vector3();
+  function placeLabels(){var w=stage.clientWidth,h=stage.clientHeight;
+    lbls.forEach(function(o){vproj.copy(o.pos).project(camera);var vis=vproj.z<1&&Math.abs(vproj.x)<1.2&&Math.abs(vproj.y)<1.2;o.el.style.display=vis?'':'none';
+      if(vis)o.el.style.transform='translate('+((vproj.x*.5+.5)*w).toFixed(1)+'px,'+((-vproj.y*.5+.5)*h).toFixed(1)+'px) translate(-50%,-50%)';});}
+  var LC={OFF:'#8a97a3',RUN:'#a397ff',CAP:'#c1b8ff',LOST:'#ef6a64',HEAT_FULL:'#ff7a45'};
+  function updLabels(){HOUSES.forEach(function(H){var o=H3[H.id].lbl,sl=stateLabel(H.s);
+    o.el.innerHTML='<i style="--c:'+LC[sl[0]]+'"></i>'+H.name+' · '+GPUS[H.gpu].name+' · '+sl[1]+(H.s.tps>0?' · '+H.s.tps.toFixed(0)+' tok/s':'');
+    o.el.classList.toggle('sel',H.id===S.sel);});}
+
+  /* ---- 선택 (클릭) */
+  var ray=new THREE.Raycaster(),mouse=new THREE.Vector2(),down=null;
+  canvas.addEventListener('pointerdown',function(e){down=[e.clientX,e.clientY];});
+  canvas.addEventListener('pointerup',function(e){if(!down)return;var dxp=e.clientX-down[0],dyp=e.clientY-down[1];down=null;if(dxp*dxp+dyp*dyp>25)return;
+    var r=canvas.getBoundingClientRect();mouse.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);ray.setFromCamera(mouse,camera);
+    var hit=ray.intersectObjects(houseGroups,true)[0];if(!hit)return;var o=hit.object;while(o&&!o.userData.id)o=o.parent;if(o)select(o.userData.id);});
+
+  /* ---- 카메라 이동 */
+  var tw=null;
+  function viewOf(v){var H=HOUSES.filter(function(h){return h.id===S.sel;})[0];
+    if(v==='house')return {p:[H.x+9,6.5,HZ+13],t:[H.x+1.8,1.6,HZ]};
+    if(v==='grid')return {p:[18,11,20],t:[30,5,-3]};
+    if(v==='dc')return {p:[14,16,14],t:[-4,8,-88]};
+    return {p:[-6,24,40],t:[0,2,-5]};}
+  function goTo(v){var o=viewOf(v);tw={p0:camera.position.clone(),t0:controls.target.clone(),p1:V(o.p[0],o.p[1],o.p[2]),t1:V(o.t[0],o.t[1],o.t[2]),k:reduce?0.999:0};}
+  function resize(){var w=stage.clientWidth,h=stage.clientHeight;if(!w||!h)return;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+  if(window.ResizeObserver)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);resize();
+  $('loading').style.display='none';
+
+  var stC={OFF:0x39424c,RUN:0x8f7dff,CAP:0xb5a9ff,LOST:0xef5b55,HEAT_FULL:0xff7a45};
+  var cold=new THREE.Color(0x3f7fd8),hot=new THREE.Color(0xff6a3d),lblT=0;
+  function tick(dt,now){
+    var night=sky(S.hour,dt);
+    HOUSES.forEach(function(H){
+      var n=H.s,o=H3[H.id],F=o.F,nodeMax=(H.sysW+GPUS[H.gpu].tdp*n.k)/1000;
+      F.solar.rate=n.solar/H.solar;F.batt.rate=n.charge>0.02?n.charge/CHG_MAX:0;F.exp.rate=n.exp/Math.max(0.5,S.gridCap);
+      /* 흡수량(kW)이 클수록 입자가 많고 빠르게: GPU 가 켜질수록 잉여가 빨리 빨려 들어감 */
+      var ab=Math.min(1,n.absorbed/H.solar*1.6);F.node.rate=ab;F.node.speed=0.45+1.8*ab;
+      F.heat.rate=(n.nodeKW>0&&!n.vent)?0.35+0.65*n.nodeKW/nodeMax:0;F.heat.speed=0.6+1.2*ab;
+      F.vent.rate=n.vent?Math.min(1,0.3+ab):0;
+      var ws=Math.min(1,n.lost/H.solar*2.2);F.waste.rate=ws;
+      var sl=stateLabel(n)[0],blink=(n.st==='LOST')?(Math.sin(now/180)>0?1:0.15):1;
+      for(var li=0;li<o.leds.length;li++){var on=(n.st==='RUN'&&li<n.k)||n.st==='LOST';
+        o.leds[li].color.setHex(on?stC[sl]:0x2a3038);if(on)o.leds[li].color.multiplyScalar(blink);}
+      o.nodeGlow.visible=n.st==='RUN'||n.st==='LOST';o.nodeGlow.material.color.setHex(n.st==='LOST'?0xef5b55:0x8f7dff);
+      o.nodeGlow.material.opacity=(n.st==='LOST'?0.6*blink:(n.job?0.55+0.35*Math.sin(now/260):0.25));
+      var lc=n.lost>0.05?0xef5b55:n.absorbed>0.02?0x8f7dff:n.exp>0.02?0x5cc28d:n.solar>0.02?0xe8a53a:0x5a6672;
+      o.led.visible=true;o.led.material.color.setHex(lc);o.led.material.opacity=n.lost>0.05?(0.45+0.55*Math.abs(Math.sin(now/220))):0.9;
+      o.soc.scale.y=Math.max(0.02,n.soc);o.soc.position.y=0.3+0.5*n.soc;o.socM.color.setHex(n.soc>0.98?0xe8a53a:0x5cc28d);
+      o.tankM.color.copy(cold).lerp(hot,Math.max(0,Math.min(1,(n.tank-30)/35)));
+    });
+    var totExp=HOUSES.reduce(function(a,H){return a+H.s.exp;},0);gridFlow.rate=totExp/Math.max(1,S.gridCap*HOUSES.length);
+    flows.forEach(function(f){f.update(dt);});
+    for(var i=jobs.length-1;i>=0;i--){var j=jobs[i];j.t+=dt/1.1;if(j.t>=1){scene.remove(j.s);j.s.material.dispose();jobs.splice(i,1);continue;}
+      j.c.getPointAt(j.dir>0?j.t:1-j.t,j.s.position);}
+    if(tw){tw.k=Math.min(1,tw.k+dt*1.4);var e=tw.k<.5?2*tw.k*tw.k:1-Math.pow(-2*tw.k+2,2)/2;camera.position.lerpVectors(tw.p0,tw.p1,e);controls.target.lerpVectors(tw.t0,tw.t1,e);if(tw.k>=1)tw=null;}
+    controls.update();renderer.render(scene,camera);placeLabels();
+    lblT-=dt;if(lblT<=0){updLabels();lblT=0.2;}
+  }
+  function highlight(){updLabels();}
+  return {tick:tick,goTo:goTo,highlight:highlight};
+}
+
+/* ===================================================================== 루프 */
+resetAll();buildCards();
+var last=performance.now(),uiT=0,chartT=0;
+function loop(now){
+  var rdt=Math.min(0.05,(now-last)/1000);last=now;
+  if(S.playing){var simDt=rdt*S.speed;while(simDt>1e-6){var d=Math.min(0.01,simDt);step(d);simDt-=d;}hourIn.value=S.hour.toFixed(2);}
+  else step(0);
+  if(three)three.tick(rdt,now);
+  uiT-=rdt;if(uiT<=0){updHud();updCards();updTable();uiT=0.15;}
+  chartT-=rdt;if(chartT<=0){drawDay();drawGpu();chartT=0.3;}
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
